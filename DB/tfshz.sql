@@ -11,7 +11,7 @@
  Target Server Version : 80034
  File Encoding         : 65001
 
- Date: 29/08/2026 20:35:18
+ Date: 31/08/2026 11:42:09
 */
 
 SET NAMES utf8mb4;
@@ -33,7 +33,7 @@ CREATE TABLE `tb_blog`  (
   `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`) USING BTREE
-) ENGINE = InnoDB AUTO_INCREMENT = 7 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
+) ENGINE = InnoDB AUTO_INCREMENT = 8 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
 
 -- ----------------------------
 -- Records of tb_blog
@@ -82,6 +82,25 @@ CREATE TABLE `tb_follow`  (
 -- ----------------------------
 
 -- ----------------------------
+-- Table structure for tb_seckill_voucher
+-- ----------------------------
+DROP TABLE IF EXISTS `tb_seckill_voucher`;
+CREATE TABLE `tb_seckill_voucher`  (
+  `voucher_id` bigint UNSIGNED NOT NULL COMMENT '关联的优惠券的id',
+  `stock` int NOT NULL COMMENT '库存',
+  `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `begin_time` timestamp NULL DEFAULT NULL COMMENT '生效时间',
+  `end_time` timestamp NULL DEFAULT NULL COMMENT '失效时间',
+  `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`voucher_id`) USING BTREE
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '秒杀优惠券表，与优惠券是一对一关系' ROW_FORMAT = COMPACT;
+
+-- ----------------------------
+-- Records of tb_seckill_voucher
+-- ----------------------------
+INSERT INTO `tb_seckill_voucher` VALUES (2, 9, '2026-08-31 10:46:06', '2026-08-31 10:00:00', '2026-09-02 10:00:00', '2026-08-31 10:46:14');
+
+-- ----------------------------
 -- Table structure for tb_shop
 -- ----------------------------
 DROP TABLE IF EXISTS `tb_shop`;
@@ -103,7 +122,7 @@ CREATE TABLE `tb_shop`  (
   `update_time` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`) USING BTREE,
   INDEX `foreign_key_type`(`type_id` ASC) USING BTREE
-) ENGINE = InnoDB AUTO_INCREMENT = 14 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
+) ENGINE = InnoDB AUTO_INCREMENT = 15 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
 
 -- ----------------------------
 -- Records of tb_shop
@@ -135,7 +154,7 @@ CREATE TABLE `tb_shop_type`  (
   `create_time` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`) USING BTREE
-) ENGINE = InnoDB AUTO_INCREMENT = 10 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
+) ENGINE = InnoDB AUTO_INCREMENT = 11 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
 
 -- ----------------------------
 -- Records of tb_shop_type
@@ -165,7 +184,7 @@ CREATE TABLE `tb_user`  (
   `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`) USING BTREE,
   UNIQUE INDEX `uniqe_key_phone`(`phone` ASC) USING BTREE
-) ENGINE = InnoDB AUTO_INCREMENT = 5 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
+) ENGINE = InnoDB AUTO_INCREMENT = 7 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
 
 -- ----------------------------
 -- Records of tb_user
@@ -174,6 +193,7 @@ INSERT INTO `tb_user` VALUES (1, '13686869696', '', '小鱼同学', '/imgs/blogs
 INSERT INTO `tb_user` VALUES (2, '13838411438', '', '可可今天不吃肉', '/imgs/icons/kkjtbcr.jpg', '2021-12-24 15:14:39', '2021-12-28 19:58:04');
 INSERT INTO `tb_user` VALUES (4, '13456789011', '', 'user_slxaxy2au9f3tanffaxr', '', '2022-01-07 12:07:53', '2022-01-07 12:07:53');
 INSERT INTO `tb_user` VALUES (5, '13456789001', '', 'user_n0bb8mwwg4', '', '2022-01-07 16:11:33', '2022-01-07 16:11:33');
+INSERT INTO `tb_user` VALUES (6, '13900000001', '', 'user_naapflk44h', '', '2026-08-31 10:44:47', '2026-08-31 10:44:47');
 
 -- ----------------------------
 -- Table structure for tb_user_info
@@ -215,12 +235,13 @@ CREATE TABLE `tb_voucher`  (
   `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`) USING BTREE
-) ENGINE = InnoDB AUTO_INCREMENT = 1 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
+) ENGINE = InnoDB AUTO_INCREMENT = 3 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
 
 -- ----------------------------
 -- Records of tb_voucher
 -- ----------------------------
 INSERT INTO `tb_voucher` VALUES (1, 1, '50元代金券', '周一至周日均可使用', '全场通用\\n无需预约\\n可无限叠加\\不兑现、不找零\\n仅限堂食', 4750, 5000, 0, 1, '2022-01-04 09:42:39', '2022-01-04 09:43:31');
+INSERT INTO `tb_voucher` VALUES (2, 1, '测试秒杀券', NULL, NULL, 1000, 5000, 1, 1, '2026-08-31 10:46:06', '2026-08-31 10:46:06');
 
 -- ----------------------------
 -- Table structure for tb_voucher_order
@@ -243,5 +264,6 @@ CREATE TABLE `tb_voucher_order`  (
 -- ----------------------------
 -- Records of tb_voucher_order
 -- ----------------------------
+INSERT INTO `tb_voucher_order` VALUES (632124585021538305, 6, 2, 1, 1, '2026-08-31 10:46:14', NULL, NULL, NULL, '2026-08-31 10:46:14');
 
 SET FOREIGN_KEY_CHECKS = 1;
