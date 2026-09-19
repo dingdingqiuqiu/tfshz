@@ -1,0 +1,18 @@
+# 自动规范化行尾符
+* text=auto
+
+# 明确声明所有文本文件，在检出时均转换为 LF (推荐)
+# 如果你的项目需要在 Windows 上保持 CRLF，可以注释掉下面这行
+* text eol=lf
+
+# 明确指定必须保持 CRLF 的文件类型 (例如 Windows 批处理脚本)
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 声明二进制文件，禁止任何转换
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.jar binary
+*.zip binary
