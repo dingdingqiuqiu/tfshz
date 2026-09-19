@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    ============================================================
+    Maven 项目描述文件（Project Object Model）
+    作用：告诉 Maven 这个项目是谁、用什么版本、需要哪些库、怎么打包
+    ============================================================
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <!-- POM 模型版本，Maven 2 以后固定为 4.0.0，不要改 -->
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+        ============================================================
+        父工程：spring-boot-starter-parent
+        作用：
+          1. 提供 Spring Boot 全家桶的“版本清单”（dependencyManagement）
+          2. 只要依赖在这个清单里，子项目就不用写版本号
+          3. 提供默认的插件配置、资源过滤、编译参数
+        ============================================================
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.16</version>
+        <!-- 空的 relativePath 表示从远程仓库查找父 POM，而不是本地目录 -->
+        <relativePath/>
+    </parent>
+
+    <!--
+        ============================================================
+        项目坐标：groupId + artifactId + version
+        唯一标识这个项目，也是打包后 jar 的默认名字
+        ============================================================
+    -->
+    <groupId>com.tfsh</groupId>
+    <artifactId>tfshz</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <name>tfshz</name>
+    <description>Demo project for Spring Boot</description>
+
+    <!--
+        ============================================================
+        属性集合：给 pom 文件当变量用
+        - java.version：Spring Boot parent 识别的属性，指定 Java 版本
+        - project.build.sourceEncoding：源码按 UTF-8 读取，避免中文乱码
+        ============================================================
+    -->
+    <properties>
+        <java.version>17</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <!--
+        ============================================================
+        依赖集合：项目需要的所有第三方库
+        规则：
+          - 在 Spring Boot BOM 里管理版本的 → 不写 <version>
+          - 不在 BOM 里的（如 MyBatis-Plus、Redisson、Hutool）→ 必须写 <version>
+        ============================================================
+    -->
+    <dependencies>
+
+        <!-- ========== Web 能力 ========== -->
+        <!-- 内含：Spring MVC + 内嵌 Tomcat + Jackson（JSON 序列化） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- ========== Redis 能力 ========== -->
+        <!-- 内含：spring-data-redis + lettuce-core（Spring Boot 3.5 默认版本兼容 Redis 7.0） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <!-- Lettuce 连接池：不加则每次操作新建连接，性能差 -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-pool2</artifactId>
+        </dependency>
+
+        <!-- ========== MySQL 8 驱动 ========== -->
+        <!-- MySQL 8 之后坐标改为 com.mysql:mysql-connector-j，版本由 parent 管理（默认 8.0.33） -->
+        <!-- scope=runtime：编译时不需要，运行时才需要，因为代码里用的是 JDBC 接口 -->
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- ========== MyBatis-Plus ========== -->
+        <!-- 不在 Spring Boot BOM 里，必须手动指定版本 -->
+        <!-- 3.5.3.1 及以上版本对 Java 17 支持更好 -->
+        <!-- Spring Boot 3.x 专用，内部已适配 mybatis-spring 3.0.x -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+            <version>3.5.5</version> <!-- 建议使用 3.5.5 或更高版本 -->
+        </dependency>
+
+        <!-- ========== Redisson 分布式锁 ========== -->
+        <!-- 用 starter 版本，自动读取 spring.data.redis 配置 -->
+        <!-- Spring Boot 3.5.x 需要用 3.x 系列，4.x 是为 Spring Boot 4 准备的 -->
+        <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson-spring-boot-starter</artifactId>
+            <version>3.52.0</version>
+        </dependency>
+
+        <!-- ========== Hutool 工具类 ========== -->
+        <!-- 提供 StrUtil、DateUtil、JSONUtil 等常用工具 -->
+        <dependency>
+            <groupId>cn.hutool</groupId>
+            <artifactId>hutool-all</artifactId>
+            <version>5.8.47</version>
+        </dependency>
+
+        <!-- ========== Lombok ========== -->
+        <!-- 编译期生成 getter/setter/构造器，运行时不依赖 -->
+        <!-- optional=true：不传递给依赖本项目的下游项目 -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- ========== 测试 ========== -->
+        <!-- 内含 JUnit 5 + Mockito + AssertJ + Spring Test -->
+        <!-- scope=test：只在测试时用，不打进生产包 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <!--
+        ============================================================
+        构建配置：告诉 Maven 怎么编译、测试、打包
+        ============================================================
+    -->
+    <build>
+        <plugins>
+            <!--
+                Spring Boot 打包插件
+                作用：
+                  1. 打成可执行 jar（胖 jar = 你的代码 + 所有依赖 + 内嵌 Tomcat）
+                  2. 支持 mvn spring-boot:run 直接启动
+                  3. 生成 MANIFEST.MF，指定 Main-Class
+            -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <!--
+                        打包时排除 Lombok
+                        Lombok 只在编译期用，运行时不需要
+                        排除后 jar 更小，启动更快
+                    -->
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

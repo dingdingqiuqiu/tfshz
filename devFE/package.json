@@ -1,0 +1,24 @@
+{
+  "name": "tingfeng-life-fe",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "2.3.4",
+    "axios": "1.6.8",
+    "lucide-vue-next": "0.468.0",
+    "pinia": "2.0.36",
+    "vite": "2.9.16",
+    "vue": "3.2.47",
+    "vue-router": "4.1.6"
+  },
+  "devDependencies": {
+    "typescript": "4.5.5",
+    "vue-tsc": "0.40.13"
+  }
+}
