@@ -362,6 +362,7 @@ mvn test        # 36 个用例
 # 32 个单测：状态机 CAS 边界 / 库存扣减边界 / 幂等 / 核销重复 / 关单回补门控
 #  4 个集成测试（Testcontainers，需要本机 Docker；没有 Docker 会自动跳过）：
 #    抢券→Kafka→落库、一人一单、坏消息进死信、Prometheus 指标
+#  首次运行会拉取 mysql:8.0 / redis:7-alpine / confluentinc/cp-kafka 镜像
 ```
 
 测试用 Mockito 打掉 Mapper 与中间件，不依赖任何外部服务；`MybatisPlusTestSupport` 负责初始化实体的 Lambda 元信息。
