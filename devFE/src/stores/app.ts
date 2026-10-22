@@ -1,13 +1,14 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { api } from '../services/api'
+import { ACCESS_KEY, clearTokens, saveTokens } from '../services/session'
 import type { User } from '../types/domain'
 
 export const useAppStore = defineStore('app', () => {
   const city = ref('杭州')
   const user = ref<User | null>(null)
 
-  const token = ref(sessionStorage.getItem('access_token'))
+  const token = ref(sessionStorage.getItem(ACCESS_KEY))
   const loggedIn = computed(() => Boolean(user.value || token.value))
 
   async function loadUser() {
@@ -23,8 +24,14 @@ export const useAppStore = defineStore('app', () => {
 
   function setTokens(access: string, refresh: string) {
     token.value = access
-    sessionStorage.setItem('access_token', access)
-    sessionStorage.setItem('refresh_token', refresh)
+    saveTokens(access, refresh)
+  }
+
+  /** 只清本地登录态，不发请求：会话失效（refresh 也过期）时由 http 层通知调用 */
+  function clearSession() {
+    user.value = null
+    token.value = null
+    clearTokens()
   }
 
   /**
@@ -38,12 +45,9 @@ export const useAppStore = defineStore('app', () => {
       // 网络问题等，仅记录，不阻断本地清理
       console.warn('[logout] 后端通知失败，仍执行本地清理', e)
     } finally {
-      user.value = null
-      token.value = null
-      sessionStorage.removeItem('access_token')
-      sessionStorage.removeItem('refresh_token')
+      clearSession()
     }
   }
 
-  return { city, user, loggedIn, loadUser, setTokens, logout }
+  return { city, user, loggedIn, loadUser, setTokens, clearSession, logout }
 })

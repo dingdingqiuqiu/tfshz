@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { ArrowLeft, LockKeyhole, Smartphone } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
@@ -13,6 +13,14 @@ type ApiResult<T = unknown> = {
 
 const router = useRouter()
 const app = useAppStore()
+
+/** 会话失效跳过来时带上的原地址（只接受站内路径，防止被外部链接利用） */
+const redirectTarget = computed(() => {
+  const target = router.currentRoute.value.query.redirect
+  return typeof target === 'string' && target.startsWith('/') && !target.startsWith('//')
+    ? target
+    : '/home'
+})
 const mode = ref<'code' | 'password'>('code')
 const phone = ref('')
 const code = ref('')
@@ -86,7 +94,7 @@ async function submit() {
       sessionStorage.setItem('refresh_token', refreshToken)
     }
     await app.loadUser()
-    router.push('/home')
+    router.push(redirectTarget.value)
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '登录失败，请稍后重试'
   }

@@ -68,6 +68,26 @@ public class ShopController {
     }
 
     /**
+     * 全部商铺（不分类型）分页查询：找店页的“全部”标签用这个，
+     * 否则只能拿到某个 typeId 的 10 条，页面上的“全部商户”永远是空的。
+     * @param current 页码
+     * @param size 每页条数，默认 50（全量店铺不足 50 家时一次返回完）
+     * @return 商铺列表
+     */
+    @GetMapping("/list")
+    public Result queryShopList(
+            @RequestParam(value = "current", defaultValue = "1") Integer current,
+            @RequestParam(value = "size", defaultValue = "50") Integer size
+    ) {
+        int pageSize = Math.min(Math.max(size == null ? 50 : size, 1), 100);
+        Page<Shop> page = shopService.query()
+                .orderByAsc("id")
+                .page(new Page<>(current, pageSize));
+        // 项目里没注册 MyBatis-Plus 分页插件，Page 的 total 恒为 0，这里只返回记录本身
+        return Result.ok(page.getRecords());
+    }
+
+    /**
      * 根据商铺名称关键字分页查询商铺信息
      * @param name 商铺名称关键字
      * @param current 页码

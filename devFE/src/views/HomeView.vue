@@ -14,6 +14,7 @@ const types = ref<ShopType[]>([])
 const blogs = ref<Blog[]>([])
 const shops = ref<Shop[]>([])
 const typeIcons = [Utensils, Waves, Sparkles, Baby, Coffee, Ticket]
+const failedImages = ref(new Set<string>())
 
 const blogPage = ref(1)
 const blogLoading = ref(false)
@@ -23,9 +24,13 @@ const featuredType = computed(() => types.value[0])
 
 function typeIcon(icon?: string) {
   if (!icon) return ''
-  if (/^(https?:|data:|\/assets\/|\/imgs\/)/.test(icon)) return icon
+  if (/^(https?:|data:|\/assets\/|\/imgs\/|\/types\/)/.test(icon)) return icon
   // 旧版首页使用 /imgs/ + t.icon；数据库保存的是 /types/xxx.png。
   return `/imgs/${icon.replace(/^\/+/, '')}`
+}
+
+function handleImageError(icon: string) {
+  failedImages.value.add(icon)
 }
 
 const search = () => {
@@ -115,7 +120,7 @@ onUnmounted(() => window.removeEventListener('scroll', handleScroll))
     <div class="hero-art"><div class="hero-orbit orbit-one"></div><div class="hero-orbit orbit-two"></div><div class="hero-sticker">今日<br /><strong>好店</strong></div><div class="hero-stat"><b>1,286</b><span>家本地好店</span></div></div>
   </section>
 
-  <section class="home-section category-section"><SectionHeading eyebrow="EXPLORE" title="按兴趣逛逛" action="全部分类" @action="router.push('/shops')" /><div class="category-grid"><button v-for="(type, index) in types.slice(0, 6)" :key="type.id" type="button" class="category-item" @click="router.push({ path: '/shops', query: { type: type.id, name: type.name } })"><span class="category-icon"><img v-if="type.icon" :src="typeIcon(type.icon)" alt="" /><component :is="typeIcons[index % typeIcons.length]" v-else :size="24" /></span><strong>{{ type.name }}</strong><small>{{ ['本地热榜', '今晚去玩', '品质生活', '周末去处', '咖啡甜点', '亲子时光'][index] }}</small></button></div></section>
+  <section class="home-section category-section"><SectionHeading eyebrow="EXPLORE" title="按兴趣逛逛" action="全部分类" @action="router.push('/shops')" /><div class="category-grid"><button v-for="(type, index) in types.slice(0, 6)" :key="type.id" type="button" class="category-item" @click="router.push({ path: '/shops', query: { type: type.id, name: type.name } })"><span class="category-icon"><img v-if="type.icon && !failedImages.has(type.icon)" :src="typeIcon(type.icon)" alt="" @error="() => handleImageError(type.icon || '')" /><component :is="typeIcons[index % typeIcons.length]" v-else :size="24" /></span><strong>{{ type.name }}</strong><small>{{ ['本地热榜', '今晚去玩', '品质生活', '周末去处', '咖啡甜点', '亲子时光'][index] }}</small></button></div></section>
 
   <section class="home-section"><SectionHeading eyebrow="NEARBY PICKS" title="附近的人气好店" action="查看全部" @action="router.push('/shops')" /><div v-if="shops.length" class="shop-grid"><ShopCard v-for="shop in shops.slice(0, 3)" :key="shop.id" :shop="shop" /></div><p v-else class="home-load-state">暂无推荐店铺</p></section>
   <section class="home-section"><SectionHeading eyebrow="CITY NOTES" title="大家都在分享" action="去发现" @action="router.push('/discover')" /><div class="blog-grid"><BlogCard v-for="blog in blogs" :key="blog.id" :blog="blog" @like="like" /></div><div v-if="blogLoading" class="home-load-state">正在加载更多内容...</div><div v-else-if="!blogHasMore && blogs.length" class="home-load-state">已经看到全部内容</div><div v-else-if="!blogs.length" class="home-load-state">暂无分享内容</div></section>

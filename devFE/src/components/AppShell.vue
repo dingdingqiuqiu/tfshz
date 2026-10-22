@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { Compass, Heart, Home, Search, UserRound, MapPin, LogIn } from 'lucide-vue-next'
 import { useAppStore } from '../stores/app'
+import { FALLBACK_AVATAR, onImageError } from '../utils/images'
 
 const route = useRoute()
 const router = useRouter()
@@ -29,7 +30,7 @@ const title = computed(() => String(route.meta.title || '首页'))
         <div class="topbar-actions">
           <button class="city-switch" type="button"><MapPin :size="16" />{{ app.city }}<span class="chevron">⌄</span></button>
           <RouterLink v-if="!app.loggedIn" to="/login" class="login-link"><LogIn :size="16" />登录</RouterLink>
-          <RouterLink v-else to="/profile" class="avatar-link"><img :src="app.user?.icon || '/assets/avatar.png'" alt="用户头像" /></RouterLink>
+          <RouterLink v-else to="/profile" class="avatar-link"><img :src="app.user?.icon || FALLBACK_AVATAR" alt="用户头像" @error="(e) => onImageError(e, FALLBACK_AVATAR)" /></RouterLink>
         </div>
       </div>
     </header>

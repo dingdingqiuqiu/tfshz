@@ -27,6 +27,10 @@ spring:
   jackson:
     default-property-inclusion: non_null
 
+  web:
+    resources:
+      static-locations: classpath:/static/,classpath:/public/,file:./imgs/
+
 mybatis-plus:
   type-aliases-package: com.tfsh.entity
 

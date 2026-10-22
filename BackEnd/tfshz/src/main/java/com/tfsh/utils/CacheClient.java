@@ -16,6 +16,10 @@ import java.util.function.Function;
 
 import static com.tfsh.utils.RedisConstants.CACHE_NULL_TTL;
 import static com.tfsh.utils.RedisConstants.LOCK_SHOP_KEY;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
+import java.lang.reflect.Type;
 
 @Slf4j
 @Component
@@ -24,6 +28,81 @@ public class CacheClient {
     private final StringRedisTemplate stringRedisTemplate;
 
     private static final ExecutorService CACHE_REBUILD_EXECUTOR = Executors.newFixedThreadPool(10);
+
+    /** 本地缓存：进程内、纳秒级；短 TTL（5 秒）解决集群各实例间的一致性问题——不做广播失效，靠过期自愈 */
+    private static final Cache<String, Object> LOCAL_CACHE = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(5, TimeUnit.SECONDS)
+            .build();
+
+    /**
+     * 二级缓存查询：本地 Caffeine -> Redis（逻辑过期）-> MySQL，逐级回填。
+     * 面向"更新频率极低、访问频率极高"的热点数据（本项目：秒杀券列表）。
+     *
+     * @param type 反序列化类型（List 等带泛型的类型必须用 TypeReference 传入，不能用 Class）
+     */
+    @SuppressWarnings("unchecked")
+    public <R, ID> R queryWithMultiLevel(
+            String keyPrefix, ID id, Type type, Function<ID, R> dbFallback, Long time, TimeUnit unit) {
+        String key = keyPrefix + id;
+
+        // 1. 查本地缓存（直接返回对象，不做无意义的 toString 再反序列化）
+        Object local = LOCAL_CACHE.getIfPresent(key);
+        if (local != null) {
+            return (R) local;
+        }
+
+        // 2. 查 Redis
+        String json = stringRedisTemplate.opsForValue().get(key);
+        R r = null;
+        if (StrUtil.isNotBlank(json)) {
+            RedisData redisData = JSONUtil.toBean(json, RedisData.class);
+
+            // 修复：JSONUtil.parse(...).toBean(Type) 替代不存在的 toBean(String, Type)
+            r = JSONUtil.parse(redisData.getData()).toBean(type);
+
+            if (redisData.getExpireTime().isAfter(LocalDateTime.now())) {
+                // 2.1 未逻辑过期：回填本地并返回
+                LOCAL_CACHE.put(key, r);
+                return r;
+            }
+
+            // 2.2 已逻辑过期：互斥锁 + 异步重建，本线程返回旧数据
+            String lockKey = LOCK_SHOP_KEY + id;
+            if (tryLock(lockKey)) {
+                try {
+                    CACHE_REBUILD_EXECUTOR.submit(() -> {
+                        try {
+                            R newR = dbFallback.apply(id);
+                            if (newR != null) {
+                                this.setWithLogicalExpire(key, newR, time, unit);
+                            }
+                        } catch (Exception e) {
+                            log.error("缓存重建失败, key={}", key, e);
+                        } finally {
+                            unlock(lockKey);
+                        }
+                    });
+                } catch (Exception e) {
+                    // 提交失败（线程池拒绝等），立刻释放锁，避免锁泄漏
+                    unlock(lockKey);
+                    log.error("提交缓存重建任务失败, key={}", key, e);
+                }
+            }
+        } else {
+            // 3. Redis 无数据：同步回源
+            r = dbFallback.apply(id);
+            if (r != null) {
+                this.setWithLogicalExpire(key, r, time, unit);
+            }
+        }
+
+        // 4. 回填本地缓存（旧数据也回填，等本地 5s 过期后被新数据替换）
+        if (r != null) {
+            LOCAL_CACHE.put(key, r);
+        }
+        return r;
+    }
 
     public CacheClient(StringRedisTemplate stringRedisTemplate) {
         this.stringRedisTemplate = stringRedisTemplate;

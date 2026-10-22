@@ -258,12 +258,26 @@ CREATE TABLE `tb_voucher_order`  (
   `use_time` timestamp NULL DEFAULT NULL COMMENT '核销时间',
   `refund_time` timestamp NULL DEFAULT NULL COMMENT '退款时间',
   `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`) USING BTREE
+  PRIMARY KEY (`id`) USING BTREE,
+  UNIQUE INDEX `uk_user_voucher`(`user_id`, `voucher_id`) USING BTREE COMMENT '一人一单：数据库层最后兜底'
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
 
 -- ----------------------------
 -- Records of tb_voucher_order
 -- ----------------------------
 INSERT INTO `tb_voucher_order` VALUES (632124585021538305, 6, 2, 1, 1, '2026-08-31 10:46:14', NULL, NULL, NULL, '2026-08-31 10:46:14');
+
+-- ----------------------------
+-- Table structure for tb_shop_favorite
+-- ----------------------------
+DROP TABLE IF EXISTS `tb_shop_favorite`;
+CREATE TABLE `tb_shop_favorite`  (
+  `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `user_id` bigint UNSIGNED NOT NULL COMMENT '用户id',
+  `shop_id` bigint UNSIGNED NOT NULL COMMENT '店铺id',
+  `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '收藏时间',
+  PRIMARY KEY (`id`) USING BTREE,
+  UNIQUE INDEX `uk_user_shop`(`user_id`, `shop_id`) USING BTREE COMMENT '同一用户对同一家店只能有一条收藏'
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT COMMENT = '店铺收藏';
 
 SET FOREIGN_KEY_CHECKS = 1;

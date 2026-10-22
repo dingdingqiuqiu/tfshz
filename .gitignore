@@ -1,0 +1,4 @@
+# ===== 本地运行产物（不要提交）=====
+*.log
+devFE/.pnpm-store/
+FrontEnd/nginx-1.18.0/logs/

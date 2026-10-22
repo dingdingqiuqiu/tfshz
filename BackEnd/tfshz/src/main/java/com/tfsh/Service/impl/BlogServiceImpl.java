@@ -4,6 +4,7 @@ import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.tfsh.Service.IBlogCommentsService;
 import com.tfsh.Service.IBlogService;
 import com.tfsh.Service.IFollowService;
 import com.tfsh.Service.IUserService;
@@ -42,6 +43,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     @Resource
     private IFollowService followService;
 
+    @Resource
+    private IBlogCommentsService blogCommentsService;
+
     @Override
     public Result queryHotBlog(Integer current) {
         // 根据用户查询
@@ -50,10 +54,11 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
         // 获取当前页数据
         List<Blog> records = page.getRecords();
-        // 查询用户
+        // 查询用户并重新计算评论数
         records.forEach(blog -> {
             this.queryBlogUser(blog);
             this.isBlogLiked(blog);
+            this.updateBlogCommentCount(blog);
         });
         return Result.ok(records);
     }
@@ -69,6 +74,8 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         queryBlogUser(blog);
         // 3.查询blog是否被点赞
         isBlogLiked(blog);
+        // 4.重新计算评论数
+        updateBlogCommentCount(blog);
         return Result.ok(blog);
     }
 
@@ -212,5 +219,15 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         User user = userService.getById(userId);
         blog.setName(user.getNickName());
         blog.setIcon(user.getIcon());
+    }
+
+    private void updateBlogCommentCount(Blog blog) {
+        // 计算该博客的实际评论数（一级评论）
+        Long commentCount = blogCommentsService.query()
+                .eq("blog_id", blog.getId())
+                .eq("parent_id", 0)
+                .eq("status", false)
+                .count();
+        blog.setComments(commentCount.intValue());
     }
 }

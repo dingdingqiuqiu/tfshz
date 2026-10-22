@@ -8,6 +8,7 @@ import com.tfsh.dto.Result;
 import com.tfsh.entity.Shop;
 import com.tfsh.mapper.ShopMapper;
 import com.tfsh.utils.CacheClient;
+import com.tfsh.utils.CacheDeleteCompensator;
 import com.tfsh.utils.SystemConstants;
 import jakarta.annotation.Resource;
 import org.springframework.data.geo.Distance;
@@ -26,7 +27,8 @@ import static com.tfsh.utils.RedisConstants.*;
 
 @Service
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
-
+    @Resource
+    private CacheDeleteCompensator cacheDeleteCompensator;
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
@@ -64,8 +66,10 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         }
         // 1.更新数据库
         updateById(shop);
-        // 2.删除缓存
-        stringRedisTemplate.delete(CACHE_SHOP_KEY + id);
+//        // 2.删除缓存
+//        stringRedisTemplate.delete(CACHE_SHOP_KEY + id);
+        // 2.删除缓存（删除失败自动进入补偿队列梯度重试，TTL 兜底，保证最终一致）
+        cacheDeleteCompensator.delete(CACHE_SHOP_KEY + id);
         return Result.ok();
     }
 

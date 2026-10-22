@@ -1,9 +1,7 @@
 import axios from 'axios'
 import type { AxiosRequestConfig } from 'axios'
 import type { Result } from '../types/domain'
-
-const ACCESS_KEY = 'access_token'
-const REFRESH_KEY = 'refresh_token'
+import { ACCESS_KEY, REFRESH_KEY, notifySessionExpired, saveTokens } from './session'
 
 /** 业务请求实例：带 token 注入与 401 静默刷新逻辑 */
 export const http = axios.create({ baseURL: '/api', timeout: 6000 })
@@ -28,8 +26,7 @@ async function refreshAccessToken(): Promise<string> {
   const body = res.data as Result<{ accessToken: string; refreshToken: string }>
   if (!body.success || !body.data) throw new Error(body.errorMsg || '刷新失败')
   // 轮换：后端签发的新 refresh 也要同步落库，旧 refresh 已经作废，留着就是定时炸弹
-  sessionStorage.setItem(ACCESS_KEY, body.data.accessToken)
-  sessionStorage.setItem(REFRESH_KEY, body.data.refreshToken)
+  saveTokens(body.data.accessToken, body.data.refreshToken)
   return body.data.accessToken
 }
 
@@ -61,9 +58,9 @@ http.interceptors.response.use(
         }
         return http.request(retried)
       } catch {
-        sessionStorage.removeItem(ACCESS_KEY)
-        sessionStorage.removeItem(REFRESH_KEY)
-        window.location.href = '/login.html'
+        // 刷新失败说明登录态已彻底失效：清凭证后走 SPA 路由跳 /login（由 main.ts 注入），
+        // 这里不能再硬编码 /login.html —— 这是已不存在的旧版静态页地址。
+        notifySessionExpired()
       }
     }
     return Promise.reject(error)
