@@ -42,9 +42,18 @@ public class VoucherOrder implements Serializable {
     private Integer payType;
 
     /**
-     * 订单状态，1：未支付；2：已支付；3：已核销；4：已取消；5：退款中；6：已退款
+     * 订单状态，1：未支付；2：已支付；3：已核销；4：已取消
      */
     private Integer status;
+
+    /** 核销码（二维码内容），与商品订单共用一套「扫码核销」 */
+    private String verifyCode;
+
+    /** CAS 乐观锁版本号：支付 / 取消 / 核销 / 超时关单都靠它二选一 */
+    private Integer version;
+
+    /** 支付截止时间，超时由定时任务关闭并回补库存 */
+    private LocalDateTime expireTime;
 
     /**
      * 下单时间
@@ -55,6 +64,11 @@ public class VoucherOrder implements Serializable {
      * 支付时间
      */
     private LocalDateTime payTime;
+
+    /**
+     * 关闭时间（用户取消 / 超时关单）
+     */
+    private LocalDateTime closeTime;
 
     /**
      * 核销时间

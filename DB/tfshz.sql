@@ -252,14 +252,20 @@ CREATE TABLE `tb_voucher_order`  (
   `user_id` bigint UNSIGNED NOT NULL COMMENT '下单的用户id',
   `voucher_id` bigint UNSIGNED NOT NULL COMMENT '购买的代金券id',
   `pay_type` tinyint UNSIGNED NOT NULL DEFAULT 1 COMMENT '支付方式 1：余额支付；2：支付宝；3：微信',
-  `status` tinyint UNSIGNED NOT NULL DEFAULT 1 COMMENT '订单状态，1：未支付；2：已支付；3：已核销；4：已取消；5：退款中；6：已退款',
+  `status` tinyint UNSIGNED NOT NULL DEFAULT 1 COMMENT '订单状态，1：待支付；2：已支付；3：已核销；4：已关闭',
+  `verify_code` varchar(32) NULL COMMENT '核销码（二维码内容，P 商品 / V 券）',
+  `version` int UNSIGNED NOT NULL DEFAULT 0 COMMENT 'CAS 乐观锁版本号',
+  `expire_time` datetime NULL COMMENT '支付截止时间，超时由定时任务关闭并回补库存',
   `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '下单时间',
   `pay_time` timestamp NULL DEFAULT NULL COMMENT '支付时间',
+  `close_time` datetime NULL COMMENT '关闭时间（用户取消 / 超时关单）',
   `use_time` timestamp NULL DEFAULT NULL COMMENT '核销时间',
   `refund_time` timestamp NULL DEFAULT NULL COMMENT '退款时间',
   `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`) USING BTREE,
-  UNIQUE INDEX `uk_user_voucher`(`user_id`, `voucher_id`) USING BTREE COMMENT '一人一单：数据库层最后兜底'
+  UNIQUE INDEX `uk_user_voucher`(`user_id`, `voucher_id`) USING BTREE COMMENT '一人一单：数据库层最后兜底',
+  UNIQUE INDEX `uk_voucher_verify_code`(`verify_code`) USING BTREE,
+  INDEX `idx_voucher_status_expire`(`status`, `expire_time`) USING BTREE
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
 
 -- ----------------------------

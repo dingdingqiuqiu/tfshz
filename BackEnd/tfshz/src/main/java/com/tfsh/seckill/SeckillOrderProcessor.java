@@ -4,18 +4,15 @@ import com.tfsh.entity.VoucherOrder;
 import com.tfsh.utils.RedisConstants;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.connection.stream.StreamRecords;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -31,19 +28,14 @@ import java.util.Map;
 @Component
 public class SeckillOrderProcessor {
 
-    private static final DefaultRedisScript<Long> ROLLBACK_SCRIPT;
-
-    static {
-        ROLLBACK_SCRIPT = new DefaultRedisScript<>();
-        ROLLBACK_SCRIPT.setLocation(new ClassPathResource("lua/seckill_rollback.lua"));
-        ROLLBACK_SCRIPT.setResultType(Long.class);
-    }
-
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
     @Resource
     private SeckillOrderPersistService persistService;
+
+    @Resource
+    private SeckillStockRollback stockRollback;
 
     /**
      * @param recordId      流消息 ID（用于 XACK / 死信回填）
@@ -127,16 +119,9 @@ public class SeckillOrderProcessor {
         }
     }
 
-    /** 回滚预扣：库存 +1、用户从“已下单集合”里移除，两步在一个 Lua 里完成 */
+    /** 回滚预扣：库存 +1、用户从“已下单集合”里移除（Lua 里两步原子完成） */
     private void rollbackStock(VoucherOrder order) {
-        try {
-            stringRedisTemplate.execute(ROLLBACK_SCRIPT,
-                    List.of(RedisConstants.SECKILL_STOCK_KEY + order.getVoucherId(),
-                            RedisConstants.SECKILL_ORDER_KEY + order.getVoucherId()),
-                    order.getUserId().toString());
-        } catch (Exception e) {
-            log.error("[seckill] 回滚预扣库存失败 voucherId={} userId={}", order.getVoucherId(), order.getUserId(), e);
-        }
+        stockRollback.rollback(order.getVoucherId(), order.getUserId());
     }
 
     private void acknowledge(RecordId recordId) {

@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { ArrowLeft, Check, Heart, MapPin, Phone, Share2, Star, Ticket } from 'lucide-vue-next'
+import { computed, onMounted, ref } from 'vue'
+import { ArrowLeft, Check, Heart, MapPin, Phone, Share2, ShoppingBag, Star, Ticket } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../services/api'
 import { useAppStore } from '../stores/app'
 import type { Shop, Voucher } from '../types/domain'
+import type { Product } from '../types/product'
 import { FALLBACK_SHOP_IMAGE, firstImage, onImageError } from '../utils/images'
 
 const route = useRoute(); const router = useRouter()
 const app = useAppStore()
 const shop = ref<Shop | null>(null); const vouchers = ref<Voucher[]>([])
+const products = ref<Product[]>([])
 const loading = ref(true); const error = ref('')
 
 /** 是否已收藏该店铺（后端持久化，刷新后仍在） */
@@ -24,10 +26,18 @@ const notice = ref<{ type: 'success' | 'error'; text: string } | null>(null)
 
 const shopId = Number(route.params.id)
 
+/** 购物车：productId -> 数量（美团式的“选商品 → 结算”） */
+const cart = ref<Record<number, number>>({})
+const ordering = ref(false)
+
+const cartCount = computed(() => Object.values(cart.value).reduce((sum, n) => sum + n, 0))
+const cartTotal = computed(() => products.value.reduce((sum, p) => sum + (cart.value[p.id] || 0) * p.price, 0))
+
 onMounted(async () => {
   try {
     shop.value = (await api.shop(shopId)) || null
     vouchers.value = (await api.vouchers(shopId)) || []
+    products.value = (await api.products(shopId)) || []
   } catch {
     error.value = '商户信息加载失败，请稍后重试'
   } finally {
@@ -36,6 +46,51 @@ onMounted(async () => {
   await loadFavorite()
   await loadPurchased()
 })
+
+function stockOf(product: Product) {
+  return typeof product.stock === 'number' ? product.stock : 0
+}
+
+function addToCart(product: Product) {
+  if (stockOf(product) <= 0) return
+  const current = cart.value[product.id] || 0
+  if (current >= stockOf(product)) return
+  cart.value = { ...cart.value, [product.id]: current + 1 }
+}
+
+function removeFromCart(product: Product) {
+  const current = cart.value[product.id] || 0
+  if (current <= 1) {
+    const next = { ...cart.value }
+    delete next[product.id]
+    cart.value = next
+    return
+  }
+  cart.value = { ...cart.value, [product.id]: current - 1 }
+}
+
+/** 结算：创建待支付订单，然后跳到订单页去支付/看二维码 */
+async function checkout() {
+  if (!cartCount.value || ordering.value) return
+  if (!requireLogin()) return
+  ordering.value = true
+  try {
+    const items = Object.entries(cart.value).map(([productId, quantity]) => ({
+      productId: Number(productId),
+      quantity,
+    }))
+    const order = await api.createOrder({ shopId, items })
+    cart.value = {}
+    router.push(`/orders/product/${order.orderId}`)
+  } catch (cause) {
+    notice.value = {
+      type: 'error',
+      text: cause instanceof Error && cause.message ? cause.message : '下单失败，请稍后重试',
+    }
+  } finally {
+    ordering.value = false
+  }
+}
 
 /** 未登录时先去登录页，登录后自动回到当前店铺 */
 function requireLogin() {
@@ -163,6 +218,37 @@ function soldOut(voucher: Voucher) {
         <p><Phone :size="18" />{{ shop.openHours || '营业中 · 10:00-22:00' }}<button type="button">电话</button></p>
       </div>
       <div class="detail-divider"></div>
+      <h2>店内商品</h2>
+      <div class="product-list">
+        <article v-for="product in products" :key="product.id" class="product-card">
+          <img :src="product.image || '/assets/food.jpg'" :alt="product.name" @error="(e) => onImageError(e, '/assets/food.jpg')" />
+          <div class="product-info">
+            <strong>{{ product.name }}</strong>
+            <span>{{ product.description || '招牌好味' }}</span>
+            <small>剩 {{ stockOf(product) }} 份</small>
+          </div>
+          <div class="product-buy">
+            <b>¥{{ (product.price / 100).toFixed(0) }}</b>
+            <div v-if="cart[product.id]" class="stepper">
+              <button type="button" @click="removeFromCart(product)">−</button>
+              <span>{{ cart[product.id] }}</span>
+              <button type="button" @click="addToCart(product)">+</button>
+            </div>
+            <button
+              v-else
+              type="button"
+              class="add-btn"
+              :disabled="stockOf(product) <= 0"
+              @click="addToCart(product)"
+            >
+              +
+            </button>
+          </div>
+        </article>
+        <div v-if="!products.length" class="empty-state">该商户还没有上架商品</div>
+      </div>
+
+      <div class="detail-divider"></div>
       <h2>精选优惠</h2>
 
       <p v-if="notice" class="voucher-notice" :class="notice.type">
@@ -214,6 +300,16 @@ function soldOut(voucher: Voucher) {
       </div>
     </aside>
   </section>
+
+  <!-- 购物车结算条：选了商品才出现 -->
+  <div v-if="cartCount" class="cart-bar">
+    <ShoppingBag :size="18" />
+    <span>已选 {{ cartCount }} 件</span>
+    <b>¥{{ (cartTotal / 100).toFixed(2) }}</b>
+    <button type="button" :disabled="ordering" @click="checkout">
+      {{ ordering ? '下单中...' : '去结算' }}
+    </button>
+  </div>
 </template>
 
 <style scoped>
@@ -268,6 +364,130 @@ function soldOut(voucher: Voucher) {
 .voucher-price button:disabled {
   background: #d9d4cb;
   color: #fff;
+  cursor: not-allowed;
+}
+
+/* ---------- 店内商品 ---------- */
+.product-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.product-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--line, #e7e2d9);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.product-card img {
+  width: 74px;
+  height: 74px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex: 0 0 74px;
+}
+
+.product-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.product-info strong {
+  font-size: 14px;
+}
+
+.product-info span {
+  color: #8a857c;
+  font-size: 11px;
+}
+
+.product-info small {
+  color: #b0a89c;
+  font-size: 10px;
+}
+
+.product-buy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.product-buy b {
+  color: var(--orange, #e8622c);
+  font-size: 17px;
+}
+
+.add-btn,
+.stepper button {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--orange, #e8622c);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.add-btn:disabled {
+  background: #d9d4cb;
+  cursor: not-allowed;
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stepper span {
+  min-width: 16px;
+  text-align: center;
+  font-size: 13px;
+}
+
+/* ---------- 结算条 ---------- */
+.cart-bar {
+  position: sticky;
+  bottom: 16px;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 22px auto 0;
+  max-width: 560px;
+  padding: 12px 18px;
+  background: #2f3d36;
+  color: #fff;
+  border-radius: 40px;
+  box-shadow: 0 10px 26px rgba(20, 28, 24, .28);
+  font-size: 12px;
+}
+
+.cart-bar b {
+  margin-left: auto;
+  font-size: 18px;
+}
+
+.cart-bar button {
+  padding: 8px 20px;
+  border-radius: 30px;
+  background: var(--orange, #e8622c);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.cart-bar button:disabled {
+  background: #6d7a73;
   cursor: not-allowed;
 }
 </style>

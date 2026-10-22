@@ -59,7 +59,7 @@ export interface BlogComment {
 export interface User { id: number; nickName: string; icon?: string }
 export interface Voucher { id: number; title: string; subTitle?: string; payValue: number; actualValue: number; type?: number; stock?: number; beginTime?: string; endTime?: string }
 
-/** 我的优惠券列表项：订单 + 券 + 店铺（后端 VoucherOrderVO） */
+/** 我的优惠券/券订单：订单 + 券 + 店铺（后端 VoucherOrderVO） */
 export interface MyVoucherOrder {
   /** 订单号是 19 位数字，后端按字符串返回，避免 JS 精度丢失 */
   orderId: string
@@ -70,7 +70,13 @@ export interface MyVoucherOrder {
   shopName?: string
   payValue?: number
   actualValue?: number
-  /** 1 未支付 / 2 已支付 / 3 已核销 / 4 已取消 */
+  /** 1 待支付 / 2 待核销 / 3 已核销 / 4 已关闭 */
   status?: number
+  statusText?: string
+  /** 核销码（二维码内容） */
+  verifyCode?: string
+  expireTime?: string
+  payTime?: string
+  verifyTime?: string
   createTime?: string
 }

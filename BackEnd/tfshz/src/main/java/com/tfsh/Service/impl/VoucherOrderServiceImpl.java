@@ -1,7 +1,9 @@
 package com.tfsh.Service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.tfsh.Service.ISeckillVoucherService;
 import com.tfsh.Service.IShopService;
 import com.tfsh.Service.IVoucherOrderService;
 import com.tfsh.Service.IVoucherService;
@@ -12,8 +14,13 @@ import com.tfsh.entity.Shop;
 import com.tfsh.entity.Voucher;
 import com.tfsh.entity.VoucherOrder;
 import com.tfsh.mapper.VoucherOrderMapper;
+import com.tfsh.order.OrderStatus;
+import com.tfsh.pay.PayRequest;
+import com.tfsh.pay.PayResult;
+import com.tfsh.pay.PayService;
 import com.tfsh.seckill.PersistOutcome;
 import com.tfsh.seckill.SeckillOrderPersistService;
+import com.tfsh.seckill.SeckillStockRollback;
 import com.tfsh.seckill.SeckillStockWarmer;
 import com.tfsh.utils.RedisConstants;
 import com.tfsh.utils.RedisIdWorker;
@@ -24,6 +31,7 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -31,19 +39,16 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
- * 秒杀下单入口。
+ * 秒杀券订单。
  *
- * 主链路（同步部分只做内存/Redis 级操作，绝不碰数据库）：
- *   1. 登录校验（LoginInterceptor + UserHolder）
- *   2. 库存预热（key 不在则从 DB 懒加载）
- *   3. 一段 Lua 原子完成：时间窗校验 -> 一人一单校验 -> 库存预扣 -> 订单消息 XADD 入队
- *   4. 立即返回 orderId；真正的落库交给 SeckillOrderStreamConsumer 异步完成
- *
- * 兜底：Lua 执行异常（脚本报错、Redis 抖动）时降级为“同步下单”，
- * 走 SeckillOrderPersistService 的条件更新 + Redisson 锁，能力等价、只是慢。
+ * 抢券这一步是秒杀特有的（Redis 预扣 + Lua + Stream 异步落库），
+ * 但**抢到之后的订单生命周期与商品订单完全同构**：
+ *   支付（PayService 抽象）→ 得核销码 → 扫二维码核销 → 超时未支付自动关单并回补库存，
+ *   所有状态流转都走「版本号 CAS」，解决支付/关单并发。
  */
 @Slf4j
 @Service
@@ -57,6 +62,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         SECKILL_SCRIPT.setResultType(Long.class);
     }
 
+    /** CAS 冲突时的最大重试次数（与商品订单一致） */
+    private static final int CAS_MAX_RETRY = 3;
+
     @Resource
     private StringRedisTemplate stringRedisTemplate;
     @Resource
@@ -66,10 +74,19 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Resource
     private SeckillOrderPersistService persistService;
     @Resource
+    private SeckillStockRollback stockRollback;
+    @Resource
     private IVoucherService voucherService;
     @Resource
     private IShopService shopService;
+    @Resource
+    private ISeckillVoucherService seckillVoucherService;
+    @Resource
+    private PayService payService;
 
+    // ============================================================
+    // 抢券（秒杀特性）
+    // ============================================================
     @Override
     public Result seckillVoucher(Long voucherId) {
         UserDTO user = UserHolder.getUser();
@@ -107,7 +124,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         int result = code == null ? -2 : code.intValue();
         return switch (result) {
             // 抢到资格：库存已预扣、消息已入队，订单由消费者异步落库
-            case 0 -> Result.ok(orderId);
+            // 订单号用字符串返回：19 位数字超过 JS Number 安全范围，用 number 会丢精度
+            case 0 -> Result.ok(String.valueOf(orderId));
             case 1 -> Result.fail("库存不足");
             case 2 -> Result.fail("不能重复下单");
             case 3 -> Result.fail("秒杀尚未开始");
@@ -122,7 +140,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         try {
             PersistOutcome outcome = persistService.persist(order);
             return switch (outcome) {
-                case SUCCESS, ALREADY_EXISTS -> Result.ok(orderId);
+                case SUCCESS, ALREADY_EXISTS -> Result.ok(String.valueOf(orderId));
                 case USER_DUPLICATE -> Result.fail("不能重复下单");
                 case STOCK_EXHAUSTED -> Result.fail("库存不足");
                 default -> Result.fail("下单失败，请稍后重试");
@@ -133,6 +151,164 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
     }
 
+    // ============================================================
+    // 支付 / 取消 / 超时关单 / 核销：与商品订单同一套生命周期
+    // ============================================================
+    @Override
+    public Result payOrder(Long orderId) {
+        UserDTO user = UserHolder.getUser();
+        if (user == null) {
+            return Result.fail("请先登录");
+        }
+        VoucherOrder order = getById(orderId);
+        if (order == null) {
+            return Result.fail("订单不存在");
+        }
+        if (!Objects.equals(order.getUserId(), user.getId())) {
+            return Result.fail("无权操作该订单");
+        }
+        if (order.getStatus() == OrderStatus.PAID || order.getStatus() == OrderStatus.VERIFIED) {
+            return Result.ok(buildVO(order));       // 幂等
+        }
+        if (order.getStatus() == OrderStatus.CLOSED) {
+            return Result.fail("订单已关闭，请重新抢购");
+        }
+
+        // 共用支付通道：金额取券的面额，商品/券在支付层没有区别
+        Voucher voucher = voucherService.getById(order.getVoucherId());
+        Integer amount = voucher == null || voucher.getPayValue() == null ? 0 : voucher.getPayValue().intValue();
+        PayResult prepay = payService.prepay(PayRequest.of(order.getId(), amount,
+                voucher == null ? "秒杀券" : voucher.getTitle()));
+        if (!payService.queryPaid(prepay.getTradeNo())) {
+            return Result.fail("支付未完成，请稍后重试");
+        }
+        return confirmPaid(orderId, prepay.getTradeNo());
+    }
+
+    @Override
+    public Result confirmPaid(Long orderId, String tradeNo) {
+        VoucherOrder order = getById(orderId);
+        if (order == null) {
+            return Result.fail("订单不存在");
+        }
+        if (order.getStatus() == OrderStatus.PAID || order.getStatus() == OrderStatus.VERIFIED) {
+            return Result.ok(buildVO(order));
+        }
+        if (order.getStatus() == OrderStatus.CLOSED) {
+            return Result.fail("订单已关闭，无法支付");
+        }
+
+        boolean paid = casStatus(orderId, OrderStatus.WAIT_PAY, OrderStatus.PAID,
+                wrapper -> wrapper.set(VoucherOrder::getPayTime, LocalDateTime.now()));
+        if (!paid) {
+            VoucherOrder latest = getById(orderId);
+            if (latest == null) {
+                return Result.fail("订单不存在");
+            }
+            if (latest.getStatus() == OrderStatus.CLOSED) {
+                log.warn("[voucher-order] 支付与关单竞争，关单获胜 orderId={} tradeNo={}", orderId, tradeNo);
+                return Result.fail("订单已超时关闭，支付未生效");
+            }
+            if (latest.getStatus() == OrderStatus.PAID || latest.getStatus() == OrderStatus.VERIFIED) {
+                return Result.ok(buildVO(latest));
+            }
+            return Result.fail("支付失败，请重试");
+        }
+        log.info("[voucher-order] 支付成功 orderId={} tradeNo={} status=PAID", orderId, tradeNo);
+        return Result.ok(buildVO(getById(orderId)));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Result cancelOrder(Long orderId) {
+        UserDTO user = UserHolder.getUser();
+        if (user == null) {
+            return Result.fail("请先登录");
+        }
+        VoucherOrder order = getById(orderId);
+        if (order == null) {
+            return Result.fail("订单不存在");
+        }
+        if (!Objects.equals(order.getUserId(), user.getId())) {
+            return Result.fail("无权操作该订单");
+        }
+        if (order.getStatus() == OrderStatus.CLOSED) {
+            return Result.ok(buildVO(order));        // 幂等
+        }
+        if (order.getStatus() == OrderStatus.PAID || order.getStatus() == OrderStatus.VERIFIED) {
+            return Result.fail("订单已支付，无法取消");
+        }
+
+        boolean closed = casStatus(orderId, OrderStatus.WAIT_PAY, OrderStatus.CLOSED,
+                wrapper -> wrapper.set(VoucherOrder::getCloseTime, LocalDateTime.now()));
+        if (!closed) {
+            VoucherOrder latest = getById(orderId);
+            if (latest != null && latest.getStatus() == OrderStatus.PAID) {
+                return Result.fail("订单已支付，无法取消");
+            }
+            return Result.fail("取消失败，请刷新后重试");
+        }
+        restoreStock(order);
+        log.info("[voucher-order] 用户取消，库存已回补 orderId={}", orderId);
+        return Result.ok(buildVO(getById(orderId)));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean closeOrder(Long orderId) {
+        boolean closed = casStatus(orderId, OrderStatus.WAIT_PAY, OrderStatus.CLOSED,
+                wrapper -> wrapper.set(VoucherOrder::getCloseTime, LocalDateTime.now()));
+        if (!closed) {
+            // 说明刚被支付（或别的实例关了）：绝不能回补库存
+            log.info("[voucher-order] 关单跳过：状态已变化 orderId={}", orderId);
+            return false;
+        }
+        VoucherOrder order = getById(orderId);
+        if (order != null) {
+            restoreStock(order);
+        }
+        log.info("[voucher-order] 超时关单成功，库存已回补 orderId={}", orderId);
+        return true;
+    }
+
+    @Override
+    public List<VoucherOrder> listExpired(int limit) {
+        return list(Wrappers.<VoucherOrder>lambdaQuery()
+                .eq(VoucherOrder::getStatus, OrderStatus.WAIT_PAY)
+                .isNotNull(VoucherOrder::getExpireTime)
+                .lt(VoucherOrder::getExpireTime, LocalDateTime.now())
+                .orderByAsc(VoucherOrder::getExpireTime)
+                .last("LIMIT " + Math.max(1, limit)));
+    }
+
+    @Override
+    public Result verifyByCode(String code) {
+        VoucherOrder order = getOne(Wrappers.<VoucherOrder>lambdaQuery()
+                .eq(VoucherOrder::getVerifyCode, code.trim().toUpperCase()), false);
+        if (order == null) {
+            return Result.fail("核销码不存在");
+        }
+        if (order.getStatus() == OrderStatus.WAIT_PAY) {
+            return Result.fail("订单未支付，无法核销");
+        }
+        if (order.getStatus() == OrderStatus.VERIFIED) {
+            return Result.fail("该订单已核销，请勿重复核销");
+        }
+        if (order.getStatus() == OrderStatus.CLOSED) {
+            return Result.fail("订单已关闭，无法核销");
+        }
+        boolean verified = casStatus(order.getId(), OrderStatus.PAID, OrderStatus.VERIFIED,
+                wrapper -> wrapper.set(VoucherOrder::getUseTime, LocalDateTime.now()));
+        if (!verified) {
+            return Result.fail("核销失败：订单状态已变化，请重新扫码");
+        }
+        log.info("[voucher-order] 核销成功 orderId={} code={}", order.getId(), order.getVerifyCode());
+        return Result.ok(buildVO(getById(order.getId())));
+    }
+
+    // ============================================================
+    // 查询
+    // ============================================================
     @Override
     public Result queryOrder(Long orderId) {
         UserDTO user = UserHolder.getUser();
@@ -147,13 +323,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         if (!user.getId().equals(order.getUserId())) {
             return Result.fail("无权查看该订单");
         }
-        return Result.ok(order);
+        return Result.ok(buildVO(order));
     }
 
-    /**
-     * 我的优惠券：订单 + 券 + 店铺三张表拼成前端列表需要的字段。
-     * 订单是异步落库的，所以用户刚抢完立刻查可能少一条，稍后刷新即可。
-     */
     @Override
     public Result queryMyOrders() {
         UserDTO user = UserHolder.getUser();
@@ -187,24 +359,57 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
         List<VoucherOrderVO> result = new ArrayList<>(orders.size());
         for (VoucherOrder order : orders) {
-            VoucherOrderVO vo = new VoucherOrderVO();
-            // 订单号是 19 位数字，用字符串返回，避免前端 Number 丢精度
-            vo.setOrderId(String.valueOf(order.getId()));
-            vo.setVoucherId(order.getVoucherId());
-            vo.setStatus(order.getStatus());
-            vo.setCreateTime(order.getCreateTime());
             Voucher voucher = voucherMap.get(order.getVoucherId());
-            if (voucher != null) {
-                vo.setTitle(voucher.getTitle());
-                vo.setSubTitle(voucher.getSubTitle());
-                vo.setPayValue(voucher.getPayValue());
-                vo.setActualValue(voucher.getActualValue());
-                vo.setShopId(voucher.getShopId());
-                vo.setShopName(shopNameMap.get(voucher.getShopId()));
-            }
-            result.add(vo);
+            String shopName = voucher == null ? null : shopNameMap.get(voucher.getShopId());
+            result.add(buildVO(order, voucher, shopName));
         }
         return Result.ok(result);
+    }
+
+    // ============================================================
+    // 内部工具
+    // ============================================================
+
+    /**
+     * 版本号 CAS 状态流转（与商品订单同一套实现）。
+     * UPDATE ... SET status=?, version=version+1 WHERE id=? AND status=? AND version=?
+     */
+    private boolean casStatus(Long orderId, int expectStatus, int targetStatus,
+                              Consumer<LambdaUpdateWrapper<VoucherOrder>> extraSets) {
+        for (int attempt = 1; attempt <= CAS_MAX_RETRY; attempt++) {
+            VoucherOrder current = getById(orderId);
+            if (current == null || current.getStatus() == null || current.getStatus() != expectStatus) {
+                return false;
+            }
+            LambdaUpdateWrapper<VoucherOrder> wrapper = Wrappers.<VoucherOrder>lambdaUpdate()
+                    .eq(VoucherOrder::getId, orderId)
+                    .eq(VoucherOrder::getStatus, expectStatus)
+                    .eq(VoucherOrder::getVersion, current.getVersion() == null ? 0 : current.getVersion())
+                    .set(VoucherOrder::getStatus, targetStatus)
+                    .setSql("version = version + 1");
+            if (extraSets != null) {
+                extraSets.accept(wrapper);
+            }
+            if (update(wrapper)) {
+                return true;
+            }
+            log.warn("[voucher-order] CAS 冲突 orderId={} 第 {}/{} 次重试（{} -> {}）",
+                    orderId, attempt, CAS_MAX_RETRY, expectStatus, targetStatus);
+        }
+        return false;
+    }
+
+    /**
+     * 回补库存：DB 的 stock + 1，Redis 的预扣库存 + 1，并把用户从「已下单集合」移除
+     * （移除后该用户还能重新抢，避免"一单过期就永久失去资格"）。
+     * 只在 CAS 成功关单之后调用。
+     */
+    private void restoreStock(VoucherOrder order) {
+        seckillVoucherService.update()
+                .setSql("stock = stock + 1")
+                .eq("voucher_id", order.getVoucherId())
+                .update();
+        stockRollback.rollback(order.getVoucherId(), order.getUserId());
     }
 
     private VoucherOrder buildOrder(long orderId, Long userId, Long voucherId) {
@@ -213,10 +418,45 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         order.setUserId(userId);
         order.setVoucherId(voucherId);
         order.setPayType(1);
-        order.setStatus(1);
+        order.setStatus(OrderStatus.WAIT_PAY);
+        order.setVersion(0);
         LocalDateTime now = LocalDateTime.now();
         order.setCreateTime(now);
         order.setUpdateTime(now);
+        order.setExpireTime(now.plusMinutes(OrderStatus.PAY_TIMEOUT_MINUTES));
         return order;
+    }
+
+    private VoucherOrderVO buildVO(VoucherOrder order) {
+        Voucher voucher = order.getVoucherId() == null ? null : voucherService.getById(order.getVoucherId());
+        String shopName = null;
+        if (voucher != null && voucher.getShopId() != null) {
+            Shop shop = shopService.getById(voucher.getShopId());
+            shopName = shop == null ? null : shop.getName();
+        }
+        return buildVO(order, voucher, shopName);
+    }
+
+    private VoucherOrderVO buildVO(VoucherOrder order, Voucher voucher, String shopName) {
+        VoucherOrderVO vo = new VoucherOrderVO();
+        // 订单号是 19 位数字，用字符串返回，避免前端 Number 丢精度
+        vo.setOrderId(String.valueOf(order.getId()));
+        vo.setVoucherId(order.getVoucherId());
+        vo.setStatus(order.getStatus());
+        vo.setStatusText(OrderStatus.text(order.getStatus()));
+        vo.setVerifyCode(order.getVerifyCode());
+        vo.setExpireTime(order.getExpireTime());
+        vo.setPayTime(order.getPayTime());
+        vo.setVerifyTime(order.getUseTime());
+        vo.setCreateTime(order.getCreateTime());
+        if (voucher != null) {
+            vo.setTitle(voucher.getTitle());
+            vo.setSubTitle(voucher.getSubTitle());
+            vo.setPayValue(voucher.getPayValue());
+            vo.setActualValue(voucher.getActualValue());
+            vo.setShopId(voucher.getShopId());
+            vo.setShopName(shopName);
+        }
+        return vo;
     }
 }

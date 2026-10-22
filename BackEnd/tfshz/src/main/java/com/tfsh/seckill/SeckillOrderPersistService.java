@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.tfsh.Service.ISeckillVoucherService;
 import com.tfsh.entity.VoucherOrder;
 import com.tfsh.mapper.VoucherOrderMapper;
+import com.tfsh.order.OrderStatus;
+import com.tfsh.order.VerifyCodeGenerator;
 import com.tfsh.utils.RedisConstants;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -14,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.interceptor.TransactionAspectSupport;
 
+import java.time.LocalDateTime;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -48,6 +51,24 @@ public class SeckillOrderPersistService {
         Long orderId = order.getId();
         Long userId = order.getUserId();
         Long voucherId = order.getVoucherId();
+
+        // 落库时补全「订单生命周期」需要的字段，让秒杀券和商品单一样可支付、可核销、可超时关单
+        LocalDateTime now = LocalDateTime.now();
+        if (order.getStatus() == null) {
+            order.setStatus(OrderStatus.WAIT_PAY);
+        }
+        if (order.getVersion() == null) {
+            order.setVersion(0);
+        }
+        if (order.getVerifyCode() == null) {
+            order.setVerifyCode(VerifyCodeGenerator.next(VerifyCodeGenerator.PREFIX_VOUCHER));
+        }
+        if (order.getExpireTime() == null) {
+            order.setExpireTime(now.plusMinutes(OrderStatus.PAY_TIMEOUT_MINUTES));
+        }
+        if (order.getUpdateTime() == null) {
+            order.setUpdateTime(now);
+        }
 
         // ① 幂等：消息可能被重复投递（消费者崩溃、pending 重投），落过库就直接收工
         if (voucherOrderMapper.selectById(orderId) != null) {

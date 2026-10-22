@@ -47,6 +47,8 @@ class MvcConfig implements WebMvcConfigurer {
                         "/user/code",
                         "/user/login",
                         "/user/refresh",
+                        // 店铺菜单（商品列表）是公开数据，未登录也能逛
+                        "/product/of/**",
                         // 他人主页公开；/user/me、/user/logout 不匹配数字，仍然需要登录
                         "/user/{id:[0-9]+}"
                 ).order(1);
