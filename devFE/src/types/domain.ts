@@ -5,6 +5,8 @@ export interface Result<T> {
   total?: number
 }
 
+export type LoginData = { accessToken: string; refreshToken: string; user?: User }
+
 export interface ShopType { id: number; name: string; icon?: string }
 
 export interface Shop {

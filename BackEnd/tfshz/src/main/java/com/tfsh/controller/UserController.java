@@ -1,5 +1,6 @@
 package com.tfsh.controller;
 
+import com.tfsh.dto.RefreshFormDTO;
 import cn.hutool.core.bean.BeanUtil;
 import com.tfsh.Service.IUserInfoService;
 import com.tfsh.Service.IUserService;
@@ -39,7 +40,7 @@ public class UserController {
      * @param loginForm 登录参数，包含手机号、验证码；或者手机号、密码
      */
     @PostMapping("/login")
-    public Result login(@RequestBody LoginFormDTO loginForm, HttpSession session){
+    public Result login(@RequestBody LoginFormDTO loginForm, HttpSession session) {
         // 实现登录功能
         return userService.login(loginForm, session);
     }
@@ -48,10 +49,18 @@ public class UserController {
      * 登出功能
      * @return 无
      */
-    @PostMapping("/logout")
-    public Result logout(){
-        // TODO 实现登出功能
-        return Result.fail("功能未完成");
+    @PostMapping("/logout" )
+    public Result logout() {
+        // 删除当前用户的 refresh 白名单记录
+        return userService.logout();
+    }
+
+    /**
+     * 刷新令牌：用 refresh token 换发新的 access + refresh（旧 refresh 立即作废，即“轮换”）
+     */
+    @PostMapping("/refresh")
+    public Result refresh(@RequestBody RefreshFormDTO form) {
+        return userService.refreshToken(form.getRefreshToken());
     }
 
     @GetMapping("/me")
@@ -75,7 +84,7 @@ public class UserController {
         return Result.ok(info);
     }
 
-    @GetMapping("/{id}")
+    @GetMapping("/{id:\\d+}")
     public Result queryUserById(@PathVariable("id") Long userId){
         // 查询详情
         User user = userService.getById(userId);

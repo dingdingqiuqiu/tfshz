@@ -6,7 +6,6 @@ import SectionHeading from '../components/SectionHeading.vue'
 import BlogCard from '../components/BlogCard.vue'
 import ShopCard from '../components/ShopCard.vue'
 import { api } from '../services/api'
-import { demoBlogs, demoShops, demoTypes } from '../data/demo'
 import type { Blog, Shop, ShopType } from '../types/domain'
 
 const router = useRouter()
@@ -39,8 +38,8 @@ async function loadTypes() {
     // 对应旧版 index.html 的 /shop-type/list，成功返回空数组时也保留后端状态。
     types.value = (await api.shopTypes()) || []
   } catch {
-    types.value = demoTypes
-    pageError.value = '分类服务暂时不可用，当前展示演示分类'
+    types.value = []
+    pageError.value = '分类服务暂时不可用，请稍后重试'
   }
 }
 
@@ -49,7 +48,8 @@ async function loadFeaturedShops() {
   try {
     shops.value = (await api.shopsByType(featuredType.value.id, 1)) || []
   } catch {
-    shops.value = demoShops
+    shops.value = []
+    pageError.value = '店铺数据加载失败，请稍后重试'
   }
 }
 
@@ -68,10 +68,11 @@ async function loadBlogs(reset = false) {
     blogHasMore.value = page.length >= 10
     if (page.length > 0) blogPage.value += 1
   } catch {
-    // 仅在后端请求失败时使用演示数据；不会覆盖后端成功返回的空状态。
-    if (reset && blogs.value.length === 0) {
-      blogs.value = demoBlogs
+    // 请求失败：停止分页并提示，不伪造数据
+    if (reset) {
+      blogs.value = []
       blogHasMore.value = false
+      pageError.value = '内容加载失败，请稍后重试'
     }
   } finally {
     blogLoading.value = false
@@ -116,8 +117,8 @@ onUnmounted(() => window.removeEventListener('scroll', handleScroll))
 
   <section class="home-section category-section"><SectionHeading eyebrow="EXPLORE" title="按兴趣逛逛" action="全部分类" @action="router.push('/shops')" /><div class="category-grid"><button v-for="(type, index) in types.slice(0, 6)" :key="type.id" type="button" class="category-item" @click="router.push({ path: '/shops', query: { type: type.id, name: type.name } })"><span class="category-icon"><img v-if="type.icon" :src="typeIcon(type.icon)" alt="" /><component :is="typeIcons[index % typeIcons.length]" v-else :size="24" /></span><strong>{{ type.name }}</strong><small>{{ ['本地热榜', '今晚去玩', '品质生活', '周末去处', '咖啡甜点', '亲子时光'][index] }}</small></button></div></section>
 
-  <section class="home-section"><SectionHeading eyebrow="NEARBY PICKS" title="附近的人气好店" action="查看全部" @action="router.push('/shops')" /><div class="shop-grid"><ShopCard v-for="shop in shops.slice(0, 3)" :key="shop.id" :shop="shop" /></div></section>
-  <section class="home-section"><SectionHeading eyebrow="CITY NOTES" title="大家都在分享" action="去发现" @action="router.push('/discover')" /><div class="blog-grid"><BlogCard v-for="blog in blogs" :key="blog.id" :blog="blog" @like="like" /></div><div v-if="blogLoading" class="home-load-state">正在加载更多内容...</div><div v-else-if="!blogHasMore && blogs.length" class="home-load-state">已经看到全部内容</div></section>
+  <section class="home-section"><SectionHeading eyebrow="NEARBY PICKS" title="附近的人气好店" action="查看全部" @action="router.push('/shops')" /><div v-if="shops.length" class="shop-grid"><ShopCard v-for="shop in shops.slice(0, 3)" :key="shop.id" :shop="shop" /></div><p v-else class="home-load-state">暂无推荐店铺</p></section>
+  <section class="home-section"><SectionHeading eyebrow="CITY NOTES" title="大家都在分享" action="去发现" @action="router.push('/discover')" /><div class="blog-grid"><BlogCard v-for="blog in blogs" :key="blog.id" :blog="blog" @like="like" /></div><div v-if="blogLoading" class="home-load-state">正在加载更多内容...</div><div v-else-if="!blogHasMore && blogs.length" class="home-load-state">已经看到全部内容</div><div v-else-if="!blogs.length" class="home-load-state">暂无分享内容</div></section>
   <p v-if="pageError" class="home-error">{{ pageError }}</p>
 </template>
 

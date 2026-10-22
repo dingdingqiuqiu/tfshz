@@ -12,4 +12,7 @@ export const api = {
   async likeBlog(id: number) { return request<unknown>({ method: 'PUT', url: `/blog/like/${id}` }) },
   async me() { return request<User>({ method: 'GET', url: '/user/me' }) },
   async login(payload: { phone: string; code?: string; password?: string }) { return request<User>({ method: 'POST', url: '/user/login', data: payload }) },
+  async logout() {
+    return request<unknown>({ method: 'POST', url: '/user/logout' })
+  },
 }

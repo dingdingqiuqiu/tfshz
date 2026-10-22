@@ -8,7 +8,9 @@ public class UserHolder {
     // 由于是Map,所以可以通过不同的tl区分不同类型的数据
     // 比如我们在另一个BlogHolder里可以定义自己的tl
     // 他自己的tl又可以放Blog类型的数据
-    // Thread.currentThread().getThreadLocalMap().put(key=tl, value=UserDTO);
+    // Thread t = Thread.currentThread();
+    // ThreadLocalMap map = getMap(t); // ThreadLocal 内部方法，访问 t.threadLocals
+    // map.set(this, user);            // this 就是 tl
     private static final ThreadLocal<UserDTO> tl = new ThreadLocal<>();
     public static void setUser(UserDTO user) {
         tl.set(user);

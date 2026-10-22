@@ -4,7 +4,7 @@ import { ArrowLeft, LockKeyhole, Smartphone } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { http } from '../services/http'
-
+import type { LoginData } from '../types/domain'
 type ApiResult<T = unknown> = {
   success: boolean
   errorMsg?: string
@@ -70,18 +70,20 @@ async function submit() {
   }
 
   try {
-    const result = await http.post<ApiResult<string>>('/user/login', {
+    const result = await http.post<ApiResult<LoginData>>('/user/login', {
       phone: phone.value,
       code: code.value,
-    }) as unknown as ApiResult<string>
+    }) as unknown as ApiResult<LoginData>
 
     if (!result.success || !result.data) throw new Error(result.errorMsg || '登录失败，请检查验证码')
 
-    // 兼容开发服务器热更新期间仍缓存旧版 store 的情况。
-    if (typeof app.setToken === 'function') {
-      app.setToken(result.data)
+    const { accessToken, refreshToken } = result.data
+    if (typeof app.setTokens === 'function') {
+      app.setTokens(accessToken, refreshToken)
     } else {
-      sessionStorage.setItem('token', result.data)
+      // 兼容开发服务器热更新期间仍缓存旧版 store 的情况
+      sessionStorage.setItem('access_token', accessToken)
+      sessionStorage.setItem('refresh_token', refreshToken)
     }
     await app.loadUser()
     router.push('/home')

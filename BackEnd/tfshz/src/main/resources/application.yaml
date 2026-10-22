@@ -35,3 +35,15 @@ logging:
     com.tfsh: debug
   pattern:
     dateformat: mm:ss.SSS
+
+# ================= JWT 配置 =================
+tfsh:
+  jwt:
+    # 签名密钥：HS256 要求至少 32 字节。生产环境必须走环境变量，严禁把真实密钥提交进 git。
+    # 生成随机密钥的命令：openssl rand -base64 48
+    secret: ${JWT_SECRET:RFFjFMAArtLeIWvzItoC+VdA4y8oXDW7Hb0I5+KXuqEeNB4BY4ungvy9s0Ap5tRY}
+    # access token 有效期：30 分钟（毫秒）
+    access-ttl: 1800000
+    # refresh token 有效期：7 天（毫秒）
+    refresh-ttl: 604800000
+
