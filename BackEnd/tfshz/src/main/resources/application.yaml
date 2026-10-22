@@ -55,6 +55,8 @@ spring:
     listener:
       # 与 KafkaConfig 里的容器工厂保持一致（RECORD = 每条处理后提交 offset）
       ack-mode: record
+      # 给消费者的 Kafka 客户端绑定 Micrometer：暴露 kafka_consumer_fetch_manager_records_lag_max 等指标
+      micrometer-enabled: true
 
 mybatis-plus:
   type-aliases-package: com.tfsh.entity
@@ -67,6 +69,22 @@ logging:
   pattern:
     dateformat: mm:ss.SSS
 
+# ================= 可观测性 =================
+management:
+  endpoints:
+    web:
+      exposure:
+        # 只放常用的几个；生产环境建议再加鉴权或走内网端口
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+    prometheus:
+      enabled: true
+  metrics:
+    tags:
+      application: tfshz
+
 # ================= 秒杀 MQ 选择 =================
 seckill:
   # kafka（默认）| stream
@@ -78,9 +96,9 @@ seckill:
 
 # ================= JWT 配置 =================
 tfsh:
-  # 图片目录（后端 /imgs/** 映射到这里）：开发机指向老静态站，容器里用 IMGS_LOCATION 覆盖
+  # 可选：额外图片目录（默认图片在 classpath:/static/imgs，已随代码入库）
   imgs:
-    location: ${IMGS_LOCATION:file:D:/1devCode/tfshz/FrontEnd/nginx-1.18.0/html/tfsh/imgs/}
+    location: ${IMGS_LOCATION:}
   jwt:
     # 签名密钥：HS256 要求至少 32 字节。生产环境必须走环境变量，严禁把真实密钥提交进 git。
     # 生成随机密钥的命令：openssl rand -base64 48

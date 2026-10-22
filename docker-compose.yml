@@ -76,13 +76,8 @@ services:
       # 独立消费组：避免和宿主机本地后端（同一 broker 时）互抢分区
       KAFKA_GROUP: seckill-order-group-compose
       SECKILL_MQ: kafka
-      # 图片目录：仓库里不含图片（历史原因，imgs 在老静态站目录且被 gitignore），
-      # 有本地图片时用下面这个 bind mount 挂进来；没有也能跑，前端有占位图兜底。
-      IMGS_LOCATION: file:/app/imgs/
       # 演示用密钥；生产必须换成自己的（openssl rand -base64 48）
       JWT_SECRET: RFFjFMAArtLeIWvzItoC+VdA4y8oXDW7Hb0I5+KXuqEeNB4BY4ungvy9s0Ap5tRY
-    volumes:
-      - ./FrontEnd/nginx-1.18.0/html/tfsh/imgs:/app/imgs:ro
     ports:
       - "18081:8081"
     depends_on:

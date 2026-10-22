@@ -33,8 +33,12 @@ public class SeckillOrderProcessor {
     @Resource
     private SeckillDeadLetterPublisher deadLetterPublisher;
 
+    @Resource
+    private SeckillMetrics metrics;
+
     public void process(VoucherOrder order) {
         PersistOutcome outcome = persistService.persist(order);
+        metrics.persist(outcome);
         switch (outcome) {
             case SUCCESS -> log.info("[seckill] 订单落库成功 orderId={} userId={} voucherId={}",
                     order.getId(), order.getUserId(), order.getVoucherId());
@@ -42,13 +46,16 @@ public class SeckillOrderProcessor {
             case USER_DUPLICATE -> {
                 stockRollback.rollbackOnce(order.getId(), order.getVoucherId(), order.getUserId());
                 deadLetterPublisher.send(order, DLQ_REASON_DUPLICATE);
+                metrics.deadLetter("duplicate");
             }
             case STOCK_EXHAUSTED -> {
                 stockRollback.rollbackOnce(order.getId(), order.getVoucherId(), order.getUserId());
                 deadLetterPublisher.send(order, DLQ_REASON_STOCK);
+                metrics.deadLetter("stock_exhausted");
             }
             default -> {
                 deadLetterPublisher.send(order, "消息字段缺失或格式错误");
+                metrics.deadLetter("invalid");
                 throw new IllegalArgumentException("订单消息无效，已转入死信 orderId=" + order.getId());
             }
         }

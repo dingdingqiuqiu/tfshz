@@ -19,6 +19,7 @@
   - [3.2 多级缓存与一致性](#32-多级缓存与一致性)
   - [3.3 高并发秒杀](#33-高并发秒杀)
   - [3.4 订单生命周期与并发控制](#34-订单生命周期与并发控制)
+  - [3.5 可观测性：把秒杀链路变成能查询的系统](#35-可观测性把秒杀链路变成能查询的系统)
 - [4. 实测数据](#4-实测数据)
 - [5. 设计取舍 FAQ](#5-设计取舍-faq)
 - [6. 快速开始](#6-快速开始)
@@ -39,8 +40,9 @@
 | 异步消息 | **Kafka**（消费组 / AckMode.RECORD / 重试 / DLQ） | 秒杀订单异步落库；**Redis Stream 作为可切换备选**（`seckill.mq=stream`） |
 | 认证 | JJWT（HS256）+ Redis | 双 Token（access/refresh）、刷新轮换、强制下线 |
 | 调度 | Spring Task（`@Scheduled`） | 超时未支付订单自动关闭 + 库存回补 |
-| 测试 | JUnit 5 + Mockito | 状态机 CAS 边界、库存扣减边界、幂等分支（32 个用例） |
-| 部署 | Docker Compose / Nginx / pnpm | 一键起 MySQL + Redis + Kafka + 后端 + 前端 |
+| 可观测性 | Spring Boot Actuator + Micrometer + Prometheus | 秒杀分流计数、落库结果、死信数、Kafka 消费 LAG |
+| 测试 | JUnit 5 + Mockito + **Testcontainers** | 32 个单测 + 4 个端到端集成测试（真实 MySQL/Redis/Kafka） |
+| 部署 | Docker Compose / Nginx / pnpm | 一键起 MySQL + Redis + Kafka + 后端 + 前端（图片随镜像打包） |
 | 压测 | JMeter（`.jmx` + 脚本生成 token） | 秒杀链路并发验证：不超卖、不重复、不丢单 |
 
 > 消息中间件默认 **Kafka**，同时保留了一套 **Redis Stream** 实现，用配置 `seckill.mq` 切换。为什么以及两者的取舍见 [§5 设计取舍](#5-设计取舍-faq)。
@@ -189,6 +191,36 @@ UPDATE tb_product_order
 
 **边界**：CAS 保证"不会既支付又关闭"，但保证不了钱 —— 第三方已扣款而订单已关闭时，必须靠「查单 + 退款」补偿（项目里保留了 `tradeNo` 字段与 `/pay/notify` 回调入口）。
 
+### 3.5 可观测性：把秒杀链路变成能查询的系统
+
+**问题**：秒杀出问题时，"卖了多少、被什么挡下、消息有没有积压"只能翻日志和手敲 `kafka-consumer-groups`。
+
+**方案**：Actuator + Micrometer 暴露 Prometheus 指标，三个自定义计数器 + Kafka 客户端自带的 LAG 指标。
+
+| 指标 | 类型 | 标签 | 用来回答 |
+|---|---|---|---|
+| `seckill_requests_total` | Counter | `result` = success / stock_empty / duplicate / not_started / ended / publish_failed / lua_error / fallback_sync | 抢购被什么挡下的（比只看成功率有用） |
+| `seckill_order_persist_total` | Counter | `outcome` = success / already_exists / user_duplicate / stock_exhausted / invalid | 消费端落库的真实结果（含幂等跳过） |
+| `seckill_dead_letter_total` | Counter | `reason` = duplicate / stock_exhausted / invalid | 死信，**>0 就该告警** |
+| `kafka_consumer_fetch_manager_records_lag_max` | Gauge（客户端自带） | `client_id` | 消费积压 |
+| `http_server_requests_seconds` | Timer（Boot 自带） | `uri` / `status` | 接口 RT 与错误率 |
+
+**关键实现**
+
+- `seckill/SeckillMetrics.java`：**标签值都是固定枚举**，绝不用 `userId` / `orderId`，避免时间序列基数爆炸；
+- Kafka 侧只加一行 `spring.kafka.listener.micrometer-enabled=true`，消费者的 lag / 拉取速率等指标就由客户端自动上报；
+- 端点只在 `/actuator` 下暴露 `health,info,metrics,prometheus`，并在 `MvcConfig` 里放行；生产应再加网关白名单或独立管理端口。
+
+```bash
+curl -s localhost:8081/actuator/prometheus | grep -E 'seckill|records_lag_max'
+# seckill_requests_total{result="success",...} 50.0
+# seckill_order_persist_total{outcome="success",...} 50.0
+# seckill_dead_letter_total{reason="stock_exhausted",...} 0.0
+# kafka_consumer_fetch_manager_records_lag_max{...} NaN   # 还没拉取过是 NaN，稳定消费后为 0
+```
+
+**边界**：技术性死信（重试耗尽、由 `DefaultErrorHandler` 转发）不计入 `seckill_dead_letter_total`，需要靠 `kafka_consumer_fetch_manager_records_failed` 或 topic 位点观察；指标只做到"可查"，告警规则（Alertmanager）没在仓库里。
+
 ---
 
 ## 4. 实测数据
@@ -215,9 +247,9 @@ UPDATE tb_product_order
 | 生产一条业务失败消息（券不存在） | 回滚预扣 + 写带原因的业务死信，主 topic 继续消费 |
 | 超时未支付订单 | Spring Task 自动关闭，DB 与 Redis 库存同步 +1 |
 
-**测试**：`mvn test` → **32 个用例全绿**（状态机 CAS 边界、库存扣减边界、幂等分支、核销重复、关单回补门控）。
+**测试**：`mvn test` → **36 个用例全绿** = 32 个单测（状态机 CAS 边界、库存扣减边界、幂等分支、核销重复、关单回补门控）+ 4 个 **Testcontainers 端到端测试**（真实 MySQL/Redis/Kafka：抢券落库、一人一单、坏消息进死信、Prometheus 指标）；没有 Docker 的环境会自动跳过集成测试，不会把构建搞红。
 
-**容器化验证**：`docker compose up -d --build` 后，`18080`（前端）、`/api` 反代、`/imgs` 图片、`18081`（后端）均返回 200；通过 compose 后端抢券 → 订单经 Kafka 落进容器内 MySQL（`verify_code` 已生成、库存递减、消费组 LAG = 0）。
+**容器化验证**：`docker compose up -d --build` 后，`18080`（前端）、`/api` 反代、`/imgs` 图片、`18081`（后端）、`/actuator/prometheus` 均返回 200；通过 compose 后端抢券 → 订单经 Kafka 落进容器内 MySQL（`verify_code` 已生成、库存递减、消费组 LAG = 0）。
 
 **缓存**：本地缓存命中为纳秒级（进程内），Redis 命中 ~0.3ms，回源 MySQL ~2ms（本地开发环境量级）。
 
@@ -268,7 +300,7 @@ docker compose down                # 停止（数据在 volume 里）；加 -v �
 
 包含 MySQL（自动执行 `DB/tfshz.sql`）、Redis（带密码）、Kafka（KRaft 单节点）、后端（Dockerfile 多阶段构建）、前端（Nginx + SPA 回退 + `/api` 反代）。
 
-- 图片：仓库里不含 `imgs` 资源（历史原因，旧静态站目录被 gitignore），compose 会把 `FrontEnd/nginx-1.18.0/html/tfsh/imgs` 挂到容器 `/app/imgs`；没有图片也能跑，前端有占位图兜底；
+- 图片：`imgs/` 已随代码入库（`BackEnd/tfshz/src/main/resources/static/imgs`），通过 `classpath:/static/imgs/` 提供，镜像里天然可用；需要额外放私有图片时用 `IMGS_LOCATION` 指向磁盘目录；
 - 多环境共用同一个 Kafka 时，务必改 `KAFKA_GROUP`，否则本地后端和容器后端会加入同一个消费组互相抢分区。
 
 ### 6.2 本地开发环境
@@ -322,11 +354,14 @@ Vite 已把 `/api`、`/imgs`、`/types` 代理到后端，图片不会 404。
 5. 「核销台」输入/扫码核销；
 6. 券订单同理：店铺页点「抢购」→ 订单页支付 → 核销。
 
-### 6.7 跑单元测试
+### 6.7 跑测试
 
 ```bash
 cd BackEnd/tfshz
-mvn test        # 32 个用例：状态机 CAS 边界 / 库存扣减边界 / 幂等 / 核销重复 / 关单回补门控
+mvn test        # 36 个用例
+# 32 个单测：状态机 CAS 边界 / 库存扣减边界 / 幂等 / 核销重复 / 关单回补门控
+#  4 个集成测试（Testcontainers，需要本机 Docker；没有 Docker 会自动跳过）：
+#    抢券→Kafka→落库、一人一单、坏消息进死信、Prometheus 指标
 ```
 
 测试用 Mockito 打掉 Mapper 与中间件，不依赖任何外部服务；`MybatisPlusTestSupport` 负责初始化实体的 Lambda 元信息。
@@ -363,9 +398,10 @@ tfshz/
 │   │   ├── task/                       # Spring Task 超时关单
 │   │   ├── entity/ dto/ mapper/        # 数据模型与出入参
 │   │   └── utils/                      # JWT、缓存、ID 生成、Redis 常量
-│   ├── src/test/java/                  # JUnit5 + Mockito（32 个用例）
+│   ├── src/test/java/                  # JUnit5 + Mockito 单测 + Testcontainers 集成测试（36 个用例）
 │   ├── src/main/resources/
 │   │   ├── lua/                        # seckill.lua / seckill_rollback.lua
+│   │   ├── static/imgs/                # 图片资源（随代码入库，classpath 直接对外）
 │   │   └── application.yaml
 │   ├── Dockerfile                      # 多阶段构建（maven → jre）
 │   └── sql/                            # 增量迁移脚本
@@ -400,6 +436,7 @@ tfshz/
 | 核销 | `POST /order/verify/{code}` | **统一核销**：商品单和券单共用 |
 | 回调 | `POST /pay/notify` | 第三方支付回调（预留，需验签） |
 | 运维 | `POST /product-order/task/close-expired` | 手动触发一轮超时关单 |
+| 监控 | `GET /actuator/health`、`GET /actuator/prometheus` | 健康检查、Prometheus 指标（秒杀分流/落库/死信/LAG） |
 | 收藏/优惠券 | `PUT /shop-favorite/{shopId}/{isFavorite}`、`GET /shop-favorite/list`、`GET /voucher-order/list` | 店铺收藏、我的券 |
 
 ---
@@ -413,8 +450,8 @@ tfshz/
 | 支付 | Mock 通道，付款即成功 | 接微信/支付宝：`prepay` 换统一下单、回调加**验签**、补**查单 + 退款**（订单已关闭但已扣款） |
 | 调度 | 单机 Spring Task，多实例会重复扫（CAS 保证不出错但浪费） | XXL-JOB / 延迟消息，把"谁来扫"也变成协调问题 |
 | 库存对账 | 依赖预扣回滚与死信人工介入 | 定时比对 `DB 库存 + 未支付订单` 与 Redis 库存，不一致告警 |
-| 可观测 | 日志 + 死信 topic | 埋点（秒杀成功率、Kafka 消费 LAG、死信数）、Prometheus + Grafana |
-| 测试 | 32 个单测（无 Spring 上下文、无集成测试） | Testcontainers 起 MySQL/Redis/Kafka 做端到端集成测试 |
+| 可观测 | Micrometer 指标 + `/actuator/prometheus`（秒杀分流/落库/死信/LAG） | 接 Alertmanager 告警规则、Grafana 面板；技术性死信还需单独计数 |
+| 测试 | 32 个单测 + 4 个 Testcontainers 集成测试 | 补 CI（GitHub Actions）、并发/故障注入（Redis 宕机、Kafka 不可用） |
 | MQ 运维 | Kafka 单节点（KRaft），副本数 1 | 生产要多副本 + 监控 + 死信治理流程 |
 | 限流 | 无 | 网关/接口级令牌桶，防刷接口（验证码、下单） |
 | 接口文档 | README + 代码 | OpenAPI 3（springdoc）自动生成 |

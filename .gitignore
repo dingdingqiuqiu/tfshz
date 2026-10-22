@@ -15,8 +15,7 @@ FrontEnd/nginx-1.18.0/html/tfsh/
 .idea/
 **/.idea/
 
-# ===== 后端 static 图片：与 FrontEnd/nginx-1.18.0/html/tfsh/imgs 重复，后端 MvcConfig 指向后者 =====
-BackEnd/tfshz/src/main/resources/static/
+# 图片资源已入库：BackEnd/tfshz/src/main/resources/static/imgs（classpath 提供，容器内也能用）
 
 # ===== 本地个人草稿 / 文档导出图（要入库时用 git add -f 显式加）=====
 /dual-token-login.drawio.png

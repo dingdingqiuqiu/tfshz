@@ -19,6 +19,7 @@ import com.tfsh.pay.PayRequest;
 import com.tfsh.pay.PayResult;
 import com.tfsh.pay.PayService;
 import com.tfsh.seckill.PersistOutcome;
+import com.tfsh.seckill.SeckillMetrics;
 import com.tfsh.seckill.SeckillOrderPersistService;
 import com.tfsh.seckill.SeckillStockRollback;
 import com.tfsh.seckill.SeckillStockWarmer;
@@ -82,6 +83,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Resource
     private SeckillOrderMessageCodec codec;
     @Resource
+    private SeckillMetrics metrics;
+    @Resource
     private IVoucherService voucherService;
     @Resource
     private IShopService shopService;
@@ -105,6 +108,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
         // 库存 key 不在就先预热（Redis 被清过 / 新建券），否则 Lua 里 GET 到 nil 会直接报错
         if (!stockWarmer.warmUpIfAbsent(voucherId)) {
+            metrics.request(SeckillMetrics.RESULT_NOT_WARMED);
             return Result.fail("秒杀券不存在");
         }
 
@@ -123,6 +127,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         } catch (Exception e) {
             // 脚本/Redis 异常不能让用户白等：降级同步下单，仍然受条件更新 + Redisson 锁保护
             log.error("[seckill] Lua 执行异常，降级为同步下单 voucherId={} userId={}", voucherId, user.getId(), e);
+            metrics.request(SeckillMetrics.RESULT_LUA_ERROR);
             return createOrderNow(orderId, user.getId(), voucherId);
         }
 
@@ -137,18 +142,35 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             if (!seckillOrderPublisher.publish(codec.fromOrder(order))) {
                 stockRollback.rollback(voucherId, user.getId());
                 log.error("[seckill] 消息投递失败，已回滚预扣 voucherId={} userId={}", voucherId, user.getId());
+                metrics.request(SeckillMetrics.RESULT_PUBLISH_FAILED);
                 return Result.fail("抢购人数太多，请稍后重试");
             }
+            metrics.request(SeckillMetrics.RESULT_SUCCESS);
             // 订单号用字符串返回：19 位数字超过 JS Number 安全范围，用 number 会丢精度
             return Result.ok(String.valueOf(orderId));
         }
-        return switch (result) {
-            case 1 -> Result.fail("库存不足");
-            case 2 -> Result.fail("不能重复下单");
-            case 3 -> Result.fail("秒杀尚未开始");
-            case 4 -> Result.fail("秒杀已经结束");
-            default -> Result.fail("秒杀活动未就绪");
-        };
+        switch (result) {
+            case 1 -> {
+                metrics.request(SeckillMetrics.RESULT_STOCK_EMPTY);
+                return Result.fail("库存不足");
+            }
+            case 2 -> {
+                metrics.request(SeckillMetrics.RESULT_DUPLICATE);
+                return Result.fail("不能重复下单");
+            }
+            case 3 -> {
+                metrics.request(SeckillMetrics.RESULT_NOT_STARTED);
+                return Result.fail("秒杀尚未开始");
+            }
+            case 4 -> {
+                metrics.request(SeckillMetrics.RESULT_ENDED);
+                return Result.fail("秒杀已经结束");
+            }
+            default -> {
+                metrics.request(SeckillMetrics.RESULT_NOT_WARMED);
+                return Result.fail("秒杀活动未就绪");
+            }
+        }
     }
 
     /** 同步兜底：不经过消息队列，直接落库（异常场景下的可用性保底） */
@@ -156,14 +178,18 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         VoucherOrder order = buildOrder(orderId, userId, voucherId);
         try {
             PersistOutcome outcome = persistService.persist(order);
-            return switch (outcome) {
+            metrics.persist(outcome);
+            Result result = switch (outcome) {
                 case SUCCESS, ALREADY_EXISTS -> Result.ok(String.valueOf(orderId));
                 case USER_DUPLICATE -> Result.fail("不能重复下单");
                 case STOCK_EXHAUSTED -> Result.fail("库存不足");
                 default -> Result.fail("下单失败，请稍后重试");
             };
+            metrics.request(result.getSuccess() ? SeckillMetrics.RESULT_FALLBACK_SYNC : SeckillMetrics.RESULT_STOCK_EMPTY);
+            return result;
         } catch (Exception e) {
             log.error("[seckill] 同步兜底下单失败 orderId={}", orderId, e);
+            metrics.request(SeckillMetrics.RESULT_FALLBACK_SYNC);
             return Result.fail("下单失败，请稍后重试");
         }
     }

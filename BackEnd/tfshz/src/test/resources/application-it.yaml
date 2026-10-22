@@ -1,0 +1,31 @@
+spring:
+  data:
+    redis:
+      # host/port/password 由 SeckillIntegrationTest 的 @DynamicPropertySource 注入
+      lettuce:
+        pool:
+          enabled: false
+
+seckill:
+  mq: kafka
+  kafka:
+    partitions: 3
+    concurrency: 2
+    group: seckill-it-group
+
+tfsh:
+  imgs:
+    location:
+
+logging:
+  level:
+    com.tfsh: info
+    org.springframework.kafka: warn
+    org.apache.kafka: warn
+    org.testcontainers: info
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus

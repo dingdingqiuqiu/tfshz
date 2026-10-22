@@ -17,16 +17,21 @@ class MvcConfig implements WebMvcConfigurer {
     private JwtUtils jwtUtils;
 
     /**
-     * 图片目录。默认指向本地老静态站的 imgs（开发机上的现状），
-     * 用环境变量 IMGS_LOCATION 覆盖，容器里就是 file:/app/imgs/。
+     * 图片额外查找目录（可选）。默认图片在 classpath:/static/imgs（已入库），
+     * 需要放本地私有图片时用 IMGS_LOCATION 指向一个磁盘目录。
      */
-    @Value("${tfsh.imgs.location:file:./imgs/}")
+    @Value("${tfsh.imgs.location:}")
     private String imgsLocation;
 
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
-        // 开发环境：直接从后端提供 /imgs/ 下的静态文件
-        registry.addResourceHandler("/imgs/**").addResourceLocations(imgsLocation);
+        // 优先 classpath（打包成 jar / 容器里同样有效），再回退到可选的磁盘目录
+        if (imgsLocation == null || imgsLocation.isBlank()) {
+            registry.addResourceHandler("/imgs/**").addResourceLocations("classpath:/static/imgs/");
+        } else {
+            registry.addResourceHandler("/imgs/**")
+                    .addResourceLocations("classpath:/static/imgs/", imgsLocation);
+        }
     }
 
     @Override
@@ -56,6 +61,8 @@ class MvcConfig implements WebMvcConfigurer {
                         "/user/refresh",
                         // 店铺菜单（商品列表）是公开数据，未登录也能逛
                         "/product/of/**",
+                        // 运维端点：健康检查 / Prometheus 抓取，不能被登录拦截（生产应在网关层限制来源）
+                        "/actuator/**",
                         // 他人主页公开；/user/me、/user/logout 不匹配数字，仍然需要登录
                         "/user/{id:[0-9]+}"
                 ).order(1);
