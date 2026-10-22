@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.pnpm-store/
+.vite/
+.idea/
+*.log
+# 只服务本地 pnpm 的 allowBuilds 配置；带进容器会让 pnpm 报 "packages field missing or empty"
+pnpm-workspace.yaml

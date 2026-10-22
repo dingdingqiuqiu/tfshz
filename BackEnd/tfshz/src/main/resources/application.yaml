@@ -31,17 +31,56 @@ spring:
     resources:
       static-locations: classpath:/static/,classpath:/public/,file:./imgs/
 
+  # ================= Kafka：秒杀订单异步落库 =================
+  kafka:
+    bootstrap-servers: ${KAFKA_SERVERS:127.0.0.1:9092}
+    producer:
+      # acks=all：所有 ISR 副本落盘才确认，配合幂等生产避免重试重复
+      acks: all
+      retries: 3
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 1
+    consumer:
+      group-id: ${KAFKA_GROUP:seckill-order-group}
+      # 新消费组从最早可读位置开始（重放历史消息便于排查）
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        max.poll.records: 50
+    listener:
+      # 与 KafkaConfig 里的容器工厂保持一致（RECORD = 每条处理后提交 offset）
+      ack-mode: record
+
 mybatis-plus:
   type-aliases-package: com.tfsh.entity
 
 logging:
   level:
     com.tfsh: debug
+    # 秒杀消费链路单独抬高日志级别，便于观察重试/DLQ
+    org.springframework.kafka: info
   pattern:
     dateformat: mm:ss.SSS
 
+# ================= 秒杀 MQ 选择 =================
+seckill:
+  # kafka（默认）| stream
+  mq: ${SECKILL_MQ:kafka}
+  kafka:
+    partitions: 3
+    concurrency: 2
+    group: ${KAFKA_GROUP:seckill-order-group}
+
 # ================= JWT 配置 =================
 tfsh:
+  # 图片目录（后端 /imgs/** 映射到这里）：开发机指向老静态站，容器里用 IMGS_LOCATION 覆盖
+  imgs:
+    location: ${IMGS_LOCATION:file:D:/1devCode/tfshz/FrontEnd/nginx-1.18.0/html/tfsh/imgs/}
   jwt:
     # 签名密钥：HS256 要求至少 32 字节。生产环境必须走环境变量，严禁把真实密钥提交进 git。
     # 生成随机密钥的命令：openssl rand -base64 48

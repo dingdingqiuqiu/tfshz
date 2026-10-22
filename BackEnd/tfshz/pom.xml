@@ -163,6 +163,20 @@
             <version>3.1.8</version>
         </dependency>
 
+        <!-- ========== Kafka：秒杀订单异步落库 ========== -->
+        <!-- 版本由 Spring Boot BOM 管理（Boot 3.5 → spring-kafka 3.3.x / kafka-clients 3.9.x） -->
+        <!-- 用 Kafka 替代 Redis Stream 作为订单消息通道：支持消费组横向扩展、分区顺序、DLQ 与重试 -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+        <!-- 测试用：内嵌 Kafka broker，可在单测里跑生产-消费闭环 -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <!--

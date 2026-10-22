@@ -8,6 +8,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.List;
 
 /**
@@ -40,6 +41,32 @@ public class SeckillStockRollback {
                     userId.toString());
         } catch (Exception e) {
             log.error("[seckill] 回滚预扣库存失败 voucherId={} userId={}", voucherId, userId, e);
+        }
+    }
+
+    /**
+     * 幂等回滚：同一个 orderId 只回滚一次。
+     *
+     * 为什么需要：Kafka 是 at-least-once，业务失败（如 DB 库存不足）回滚后如果提交 offset 前崩溃，
+     * 消息会被重投、再次触发回滚。没有守卫的话 INCR 会执行多次，Redis 库存虚高。
+     * 用 SETNX + 24h TTL 做一次性标记，比"查库判断"便宜得多。
+     */
+    public void rollbackOnce(Long orderId, Long voucherId, Long userId) {
+        if (orderId == null) {
+            rollback(voucherId, userId);
+            return;
+        }
+        try {
+            String guardKey = RedisConstants.SECKILL_ROLLBACK_KEY + orderId;
+            Boolean first = stringRedisTemplate.opsForValue()
+                    .setIfAbsent(guardKey, "1", Duration.ofHours(24));
+            if (!Boolean.TRUE.equals(first)) {
+                log.info("[seckill] 预扣已回滚过，跳过 orderId={}", orderId);
+                return;
+            }
+            rollback(voucherId, userId);
+        } catch (Exception e) {
+            log.error("[seckill] 幂等回滚失败 orderId={}", orderId, e);
         }
     }
 }

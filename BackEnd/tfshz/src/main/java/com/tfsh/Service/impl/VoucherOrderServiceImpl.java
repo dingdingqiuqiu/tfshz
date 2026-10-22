@@ -3,7 +3,6 @@ package com.tfsh.Service.impl;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.tfsh.Service.ISeckillVoucherService;
 import com.tfsh.Service.IShopService;
 import com.tfsh.Service.IVoucherOrderService;
 import com.tfsh.Service.IVoucherService;
@@ -15,6 +14,7 @@ import com.tfsh.entity.Voucher;
 import com.tfsh.entity.VoucherOrder;
 import com.tfsh.mapper.VoucherOrderMapper;
 import com.tfsh.order.OrderStatus;
+import com.tfsh.order.StockService;
 import com.tfsh.pay.PayRequest;
 import com.tfsh.pay.PayResult;
 import com.tfsh.pay.PayService;
@@ -22,6 +22,8 @@ import com.tfsh.seckill.PersistOutcome;
 import com.tfsh.seckill.SeckillOrderPersistService;
 import com.tfsh.seckill.SeckillStockRollback;
 import com.tfsh.seckill.SeckillStockWarmer;
+import com.tfsh.seckill.mq.SeckillOrderMessageCodec;
+import com.tfsh.seckill.mq.SeckillOrderPublisher;
 import com.tfsh.utils.RedisConstants;
 import com.tfsh.utils.RedisIdWorker;
 import com.tfsh.utils.UserHolder;
@@ -76,11 +78,15 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Resource
     private SeckillStockRollback stockRollback;
     @Resource
+    private SeckillOrderPublisher seckillOrderPublisher;
+    @Resource
+    private SeckillOrderMessageCodec codec;
+    @Resource
     private IVoucherService voucherService;
     @Resource
     private IShopService shopService;
     @Resource
-    private ISeckillVoucherService seckillVoucherService;
+    private StockService stockService;
     @Resource
     private PayService payService;
 
@@ -109,8 +115,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                     SECKILL_SCRIPT,
                     List.of(RedisConstants.SECKILL_STOCK_KEY + voucherId,
                             RedisConstants.SECKILL_ORDER_KEY + voucherId,
-                            RedisConstants.SECKILL_META_KEY + voucherId,
-                            RedisConstants.SECKILL_ORDER_STREAM),
+                            RedisConstants.SECKILL_META_KEY + voucherId),
                     user.getId().toString(),
                     voucherId.toString(),
                     String.valueOf(orderId),
@@ -122,10 +127,22 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
 
         int result = code == null ? -2 : code.intValue();
-        return switch (result) {
-            // 抢到资格：库存已预扣、消息已入队，订单由消费者异步落库
+        if (result == 0) {
+            // 抢到资格：库存已预扣 → 投递 MQ 消息 → 消费者异步落库。
+            //
+            // 注意这里与"Lua 里 XADD"的取舍：
+            //   Lua 内入队是原子的（不会出现扣了库存没入队），但 MQ 就被绑死在 Redis 上；
+            //   改成 Java 投递后，入队失败必须显式回滚预扣，否则库存被这条没进队的请求吃掉。
+            VoucherOrder order = buildOrder(orderId, user.getId(), voucherId);
+            if (!seckillOrderPublisher.publish(codec.fromOrder(order))) {
+                stockRollback.rollback(voucherId, user.getId());
+                log.error("[seckill] 消息投递失败，已回滚预扣 voucherId={} userId={}", voucherId, user.getId());
+                return Result.fail("抢购人数太多，请稍后重试");
+            }
             // 订单号用字符串返回：19 位数字超过 JS Number 安全范围，用 number 会丢精度
-            case 0 -> Result.ok(String.valueOf(orderId));
+            return Result.ok(String.valueOf(orderId));
+        }
+        return switch (result) {
             case 1 -> Result.fail("库存不足");
             case 2 -> Result.fail("不能重复下单");
             case 3 -> Result.fail("秒杀尚未开始");
@@ -283,11 +300,14 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     @Override
     public Result verifyByCode(String code) {
-        VoucherOrder order = getOne(Wrappers.<VoucherOrder>lambdaQuery()
-                .eq(VoucherOrder::getVerifyCode, code.trim().toUpperCase()), false);
-        if (order == null) {
+        // 用 list + 取第一条代替 getOne：语义完全一样（取不到就是 null），但少一层包装，
+        // 单测里只需打桩 selectList 即可，不依赖 MyBatis-Plus 内部对 getOne 的实现差异。
+        List<VoucherOrder> matched = list(Wrappers.<VoucherOrder>lambdaQuery()
+                .eq(VoucherOrder::getVerifyCode, code.trim().toUpperCase()));
+        if (matched == null || matched.isEmpty()) {
             return Result.fail("核销码不存在");
         }
+        VoucherOrder order = matched.get(0);
         if (order.getStatus() == OrderStatus.WAIT_PAY) {
             return Result.fail("订单未支付，无法核销");
         }
@@ -405,10 +425,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      * 只在 CAS 成功关单之后调用。
      */
     private void restoreStock(VoucherOrder order) {
-        seckillVoucherService.update()
-                .setSql("stock = stock + 1")
-                .eq("voucher_id", order.getVoucherId())
-                .update();
+        stockService.restoreSeckillVoucher(order.getVoucherId());
         stockRollback.rollback(order.getVoucherId(), order.getUserId());
     }
 

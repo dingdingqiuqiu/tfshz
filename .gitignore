@@ -3,6 +3,11 @@
 devFE/.pnpm-store/
 FrontEnd/nginx-1.18.0/logs/
 
+# ===== 压测产物（脚本入库存，结果不入库）=====
+loadtest/tokens.csv
+loadtest/*.jtl
+loadtest/report/
+
 # ===== 遗留的旧版静态站（只给本地 nginx 提供 /tfsh/ 静态文件，不进版本库）=====
 FrontEnd/nginx-1.18.0/html/tfsh/
 

@@ -18,8 +18,8 @@ import com.tfsh.entity.Shop;
 import com.tfsh.mapper.ProductOrderItemMapper;
 import com.tfsh.mapper.ProductOrderMapper;
 import com.tfsh.order.BizException;
-import com.tfsh.order.BizException;
 import com.tfsh.order.OrderStatus;
+import com.tfsh.order.StockService;
 import com.tfsh.order.VerifyCodeGenerator;
 import com.tfsh.pay.PayRequest;
 import com.tfsh.pay.PayResult;
@@ -68,6 +68,8 @@ public class ProductOrderServiceImpl extends ServiceImpl<ProductOrderMapper, Pro
     private PayService payService;
     @Resource
     private IShopService shopService;
+    @Resource
+    private StockService stockService;
 
     // ============================================================
     // 下单
@@ -117,12 +119,8 @@ public class ProductOrderServiceImpl extends ServiceImpl<ProductOrderMapper, Pro
             }
 
             int quantity = entry.getValue();
-            // 条件更新：库存够才扣，原子且不会超卖
-            boolean deducted = productService.update()
-                    .setSql("stock = stock - " + quantity)
-                    .eq("id", product.getId())
-                    .ge("stock", quantity)
-                    .update();
+            // 条件更新：库存够才扣，原子且不会超卖（见 StockService）
+            boolean deducted = stockService.deductProduct(product.getId(), quantity);
             if (!deducted) {
                 // 抛业务异常 -> 事务回滚，前面已经扣掉的库存会一起退回
                 throw new BizException("商品「" + product.getName() + "」库存不足，请调整数量");
@@ -398,10 +396,7 @@ public class ProductOrderServiceImpl extends ServiceImpl<ProductOrderMapper, Pro
         List<ProductOrderItem> items = itemMapper.selectList(Wrappers.<ProductOrderItem>lambdaQuery()
                 .eq(ProductOrderItem::getOrderId, orderId));
         for (ProductOrderItem item : items) {
-            productService.update()
-                    .setSql("stock = stock + " + item.getQuantity())
-                    .eq("id", item.getProductId())
-                    .update();
+            stockService.restoreProduct(item.getProductId(), item.getQuantity());
         }
     }
 

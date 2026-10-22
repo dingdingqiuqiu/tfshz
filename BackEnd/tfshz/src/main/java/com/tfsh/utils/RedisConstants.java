@@ -29,17 +29,19 @@ public class RedisConstants {
     public static final String SHOP_GEO_KEY = "shop:geo:";
     public static final String USER_SIGN_KEY = "sign:";
 
-    // ============ 秒杀：Redis 预扣库存 + Stream 异步下单 ============
+    // ============ 秒杀：Redis 预扣库存 + MQ（Kafka / Redis Stream）异步下单 ============
     /** 一人一单集合：seckill:order:{voucherId} -> Set<userId>，Lua 里做资格校验 */
     public static final String SECKILL_ORDER_KEY = "seckill:order:";
     /** 活动元信息：seckill:meta:{voucherId} -> hash{begin,end}，毫秒时间戳，Lua 里校验时间窗 */
     public static final String SECKILL_META_KEY = "seckill:meta:";
-    /** 订单消息流（Stream），Lua 里 XADD 入队 */
+    /** 订单消息流（seckill.mq=stream 时使用；默认走 Kafka） */
     public static final String SECKILL_ORDER_STREAM = "stream.orders";
     /** 消费者组名 */
     public static final String SECKILL_ORDER_GROUP = "seckill-group";
     /** 死信队列：重试耗尽或业务失败（DB 库存不足/重复下单）的消息落这里，便于人工对账 */
     public static final String SECKILL_ORDER_DLQ = "stream.orders.dlq";
+    /** 幂等回滚标记：seckill:rolledback:{orderId}，保证同一条消息只回滚一次预扣 */
+    public static final String SECKILL_ROLLBACK_KEY = "seckill:rolledback:";
     /** 下单锁（Redisson）：lock:order:{voucherId}:{userId}，落库侧的一人一单兜底 */
     public static final String SECKILL_LOCK_KEY = "lock:order:";
     /** 单条消息最多投递次数，超过进死信 */

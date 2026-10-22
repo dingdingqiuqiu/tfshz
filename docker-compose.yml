@@ -1,0 +1,107 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: tfshz-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: tfshz
+      TZ: Asia/Shanghai
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./DB/tfshz.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_general_ci"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: tfshz-redis
+    ports:
+      - "6380:6379"
+    # 必须设密码：应用侧 spring.data.redis.password 为空串时 Spring Data Redis 仍会发 AUTH，
+    # 无密码的 Redis 会直接报 "AUTH called without any password configured"
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-tfshz123}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-tfshz123}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: tfshz-kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:19092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+    ports:
+      - "19092:19092"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  backend:
+    build:
+      context: ./BackEnd/tfshz
+    container_name: tfshz-backend
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/tfshz?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+      DB_USERNAME: root
+      DB_PASSWORD: root
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-tfshz123}
+      KAFKA_SERVERS: kafka:9092
+      # 独立消费组：避免和宿主机本地后端（同一 broker 时）互抢分区
+      KAFKA_GROUP: seckill-order-group-compose
+      SECKILL_MQ: kafka
+      # 图片目录：仓库里不含图片（历史原因，imgs 在老静态站目录且被 gitignore），
+      # 有本地图片时用下面这个 bind mount 挂进来；没有也能跑，前端有占位图兜底。
+      IMGS_LOCATION: file:/app/imgs/
+      # 演示用密钥；生产必须换成自己的（openssl rand -base64 48）
+      JWT_SECRET: RFFjFMAArtLeIWvzItoC+VdA4y8oXDW7Hb0I5+KXuqEeNB4BY4ungvy9s0Ap5tRY
+    volumes:
+      - ./FrontEnd/nginx-1.18.0/html/tfsh/imgs:/app/imgs:ro
+    ports:
+      - "18081:8081"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./devFE
+    container_name: tfshz-frontend
+    ports:
+      - "18080:80"
+    depends_on:
+      - backend
+
+volumes:
+  mysql-data:
+  redis-data:

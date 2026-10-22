@@ -1,10 +1,10 @@
 package com.tfsh.seckill;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.tfsh.Service.ISeckillVoucherService;
 import com.tfsh.entity.VoucherOrder;
 import com.tfsh.mapper.VoucherOrderMapper;
 import com.tfsh.order.OrderStatus;
+import com.tfsh.order.StockService;
 import com.tfsh.order.VerifyCodeGenerator;
 import com.tfsh.utils.RedisConstants;
 import jakarta.annotation.Resource;
@@ -38,7 +38,7 @@ public class SeckillOrderPersistService {
     private VoucherOrderMapper voucherOrderMapper;
 
     @Resource
-    private ISeckillVoucherService seckillVoucherService;
+    private StockService stockService;
 
     @Resource
     private RedissonClient redissonClient;
@@ -92,12 +92,8 @@ public class SeckillOrderPersistService {
                 return PersistOutcome.USER_DUPLICATE;
             }
 
-            // ③ 条件更新：库存 > 0 才扣，原子且不会超卖
-            boolean deducted = seckillVoucherService.update()
-                    .setSql("stock = stock - 1")
-                    .eq("voucher_id", voucherId)
-                    .gt("stock", 0)
-                    .update();
+            // ③ 条件更新：库存 > 0 才扣，原子且不会超卖（见 StockService）
+            boolean deducted = stockService.deductSeckillVoucher(voucherId);
             if (!deducted) {
                 return PersistOutcome.STOCK_EXHAUSTED;
             }

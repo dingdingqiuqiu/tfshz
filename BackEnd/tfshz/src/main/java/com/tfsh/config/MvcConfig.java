@@ -4,6 +4,7 @@ import com.tfsh.utils.JwtUtils;
 import com.tfsh.utils.LoginInterceptor;
 import com.tfsh.utils.RefreshTokenInterceptor;
 import jakarta.annotation.Resource;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
@@ -15,11 +16,17 @@ class MvcConfig implements WebMvcConfigurer {
     @Resource
     private JwtUtils jwtUtils;
 
+    /**
+     * 图片目录。默认指向本地老静态站的 imgs（开发机上的现状），
+     * 用环境变量 IMGS_LOCATION 覆盖，容器里就是 file:/app/imgs/。
+     */
+    @Value("${tfsh.imgs.location:file:./imgs/}")
+    private String imgsLocation;
+
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
         // 开发环境：直接从后端提供 /imgs/ 下的静态文件
-        registry.addResourceHandler("/imgs/**")
-                .addResourceLocations("file:D:/1devCode/tfshz/FrontEnd/nginx-1.18.0/html/tfsh/imgs/");
+        registry.addResourceHandler("/imgs/**").addResourceLocations(imgsLocation);
     }
 
     @Override

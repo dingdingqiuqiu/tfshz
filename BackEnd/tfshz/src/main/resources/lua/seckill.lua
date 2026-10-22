@@ -1,18 +1,19 @@
 --[[
-  秒杀资格校验 + 库存预扣 + 订单入队（一次 Lua 调用内全部完成，Redis 单线程执行 => 天然原子）
+  秒杀资格校验 + 库存预扣（一次 Lua 调用内完成，Redis 单线程执行 => 天然原子）
+  订单消息的投递不在这里：由 Java 侧根据 seckill.mq 选择 Kafka 或 Redis Stream，
+  投递失败时调用方回滚预扣（见 VoucherOrderServiceImpl#seckillVoucher）。
 
   KEYS[1] = seckill:stock:{voucherId}    库存（String，预扣在这里）
   KEYS[2] = seckill:order:{voucherId}    已抢到资格的用户集合（Set，一人一单）
   KEYS[3] = seckill:meta:{voucherId}     活动元信息（Hash：begin / end，毫秒时间戳）
-  KEYS[4] = stream.orders                订单消息流（XADD 入队）
 
   ARGV[1] = userId
   ARGV[2] = voucherId
-  ARGV[3] = orderId
+  ARGV[3] = orderId（脚本不再使用，保留参数位以便日志/排查对账）
   ARGV[4] = 当前时间戳（毫秒，由 Java 传入，避免 Lua 里 now 不可控）
 
   返回值：
-    0  抢到资格（库存已预扣、用户已记录、订单消息已入队）
+    0  抢到资格（库存已预扣、用户已记录，等待调用方投递消息）
     1  库存不足
     2  重复下单（一人一单）
     3  秒杀尚未开始
@@ -23,11 +24,9 @@
 local stockKey = KEYS[1]
 local orderKey = KEYS[2]
 local metaKey = KEYS[3]
-local streamKey = KEYS[4]
 
 local userId = ARGV[1]
 local voucherId = ARGV[2]
-local orderId = ARGV[3]
 local now = tonumber(ARGV[4])
 
 -- 1. 库存：key 不存在时 GET 返回 false，tonumber(false) 得到 nil，
@@ -61,12 +60,8 @@ end
 redis.call('decr', stockKey)
 -- 6. 记录下单用户，供下一次资格校验
 redis.call('sadd', orderKey, userId)
--- 7. 订单消息入队：后面由消费者组异步落库，请求线程不再等 DB
---    XADD 的 * 由 Redis 生成时间序列 ID；Redis 7 用效果复制，脚本里可以用
-redis.call('xadd', streamKey, '*',
-        'orderId', orderId,
-        'userId', userId,
-        'voucherId', voucherId,
-        'createTime', now)
 
+-- 7. 订单消息的投递由 Java 侧完成（Kafka / Redis Stream 可切换），脚本只负责"抢到资格"。
+--    若投递失败，调用方必须回滚上面的预扣（stock +1、SREM）—— 这是"MQ 与 Redis 解耦"的代价，
+--    换来的是 Kafka 可替换：分区顺序、消费组横向扩展、DLQ 与重试策略交给 Kafka 原生能力。
 return 0
