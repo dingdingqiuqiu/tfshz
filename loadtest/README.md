@@ -50,11 +50,13 @@ docker run --rm -v "$PWD":/test -w /test justb4/jmeter:5.5 \
 
 > Windows 的 Docker Desktop 里 `host.docker.internal` 指向宿主机；Linux 需要 `--add-host host.docker.internal:host-gateway`。
 
-### 两个踩过的坑
+### 三个踩过的坑
 
 1. **`>` 重定向会写出 UTF-16**：Windows PowerShell 的 `node xxx > tokens.csv` 默认写 UTF-16LE，
    JMeter 按 UTF-8 读出来就是乱码 token，现象是**100% 401**。所以脚本提供 `--out` 参数自己写 UTF-8 文件。
 2. **result.jtl 是追加写**：重复跑不删旧的 jtl，会把上一轮的失败混进统计里。
+3. **清理压测数据时要连 MQ 一起清**：只删订单不重置消费位点，Kafka 里的消息会被重放，
+   再次扣库存 / 再次落库（此时订单号已不存在，幂等键失效）。要么重置 consumer group 到 latest，要么换 group 名。
 
 ## 压测后怎么核对
 
@@ -84,15 +86,15 @@ docker exec tfshz-kafka /opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server localhost:9092 --topic seckill-order-dlq --from-beginning --max-messages 10
 ```
 
-## 参考结果（本机单实例，2026-10）
+## 参考结果（本机单实例，Kafka 通道）
 
 | 指标 | 结果 |
 |---|---|
-| 线程数 / 库存 | 200 / 50 |
+| 线程数 / 库存 | 200（ramp 1s）/ 50 |
 | 成功抢到 | 50（其余 150 返回「库存不足」） |
-| 总耗时 | ≈ 610 ms |
+| 吞吐 / 平均 RT / 最大 RT | ≈ 147 req/s / 398 ms / 1.0 s（Err 0） |
 | DB 订单 / 去重用户 | 50 / 50 |
 | DB 库存 / Redis 库存 | 0 / 0 |
-| 死信 / PEL 残留 | 0 / 0 |
+| 消费组 LAG / 新增死信 | 0 / 0 |
 
 > 单机 + 本地 mysql/redis，仅用于验证正确性与量级，不作为性能结论。
