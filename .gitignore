@@ -5,3 +5,20 @@ FrontEnd/nginx-1.18.0/logs/
 
 # ===== 遗留的旧版静态站（只给本地 nginx 提供 /tfsh/ 静态文件，不进版本库）=====
 FrontEnd/nginx-1.18.0/html/tfsh/
+
+# ===== IDE 本地配置（每个开发者机器上都不一样，不进版本库）=====
+.idea/
+**/.idea/
+
+# ===== 后端 static 图片：与 FrontEnd/nginx-1.18.0/html/tfsh/imgs 重复，后端 MvcConfig 指向后者 =====
+BackEnd/tfshz/src/main/resources/static/
+
+# ===== 本地个人草稿 / 文档导出图（要入库时用 git add -f 显式加）=====
+/dual-token-login.drawio.png
+/dual-token-login.svg
+/拓展话术.txt
+/操作指南.md
+/滑动窗口限流话术.txt
+/秒杀话术.txt
+/缓存模块操作指南.md
+/缓存话术.txt
